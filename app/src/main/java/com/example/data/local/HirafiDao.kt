@@ -1,0 +1,53 @@
+package com.example.data.local
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface HirafiDao {
+
+    @Query("SELECT * FROM service_requests ORDER BY createdAtMillis DESC")
+    fun observeAllRequests(): Flow<List<ServiceRequestEntity>>
+
+    @Query("SELECT * FROM service_requests WHERE id = :requestId LIMIT 1")
+    suspend fun getRequestById(requestId: String): ServiceRequestEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRequest(request: ServiceRequestEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRequests(requests: List<ServiceRequestEntity>)
+
+    @Query("SELECT * FROM service_offers WHERE requestId = :requestId ORDER BY createdAtMillis DESC")
+    fun observeOffersForRequest(requestId: String): Flow<List<ServiceOfferEntity>>
+
+    @Query("SELECT * FROM service_offers WHERE id = :offerId LIMIT 1")
+    suspend fun getOfferById(offerId: String): ServiceOfferEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertOffer(offer: ServiceOfferEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertOffers(offers: List<ServiceOfferEntity>)
+
+    @Query("UPDATE service_offers SET status = :newStatus WHERE requestId = :requestId AND id != :acceptedOfferId AND status = 'pending'")
+    suspend fun declineOtherOffers(requestId: String, acceptedOfferId: String, newStatus: String = "declined")
+
+    @Query("SELECT * FROM chat_messages WHERE requestId = :requestId ORDER BY createdAtMillis ASC")
+    fun observeMessagesForRequest(requestId: String): Flow<List<ChatMessageEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: ChatMessageEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessages(messages: List<ChatMessageEntity>)
+
+    @Query("SELECT * FROM reviews ORDER BY createdAtMillis DESC")
+    fun observeReviews(): Flow<List<ReviewEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertReview(review: ReviewEntity)
+}

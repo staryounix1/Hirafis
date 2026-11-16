@@ -1,0 +1,1141 @@
+package com.example.ui.screens
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.GpsFixed
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Navigation
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.RadioButtonChecked
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.location.LiveTrackingState
+import com.example.data.model.HirafiCategories
+import com.example.data.model.LiveRouteState
+import com.example.data.model.MoroccanLocations
+import com.example.data.model.RequestStatus
+import com.example.data.model.ServiceRequest
+import com.example.data.model.UserRole
+import com.example.data.remote.MapRoutingService
+import com.example.ui.components.HirafiRealMap
+import com.example.ui.components.RealtimeBiddingBottomSheet
+import com.example.ui.theme.ElectricLime
+import com.example.ui.theme.ElectricLimeSoft
+import com.example.ui.theme.ObsidianBlack
+import com.example.ui.theme.UrgentCoral
+import com.example.ui.theme.UrgentCoralSoft
+import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.viewmodel.HirafiViewModel
+import com.example.ui.viewmodel.RealtimeBiddingViewModel
+
+@Composable
+fun CraftsmanDashboardScreen(
+    viewModel: HirafiViewModel,
+    biddingViewModel: RealtimeBiddingViewModel,
+    onOpenDrawer: () -> Unit,
+    onOpenChat: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val session by viewModel.userSession.collectAsStateWithLifecycle()
+    val allRequests by viewModel.allRequests.collectAsStateWithLifecycle()
+    val openRequests by viewModel.craftsmanOpenRequests.collectAsStateWithLifecycle()
+    val userGps by viewModel.userGpsLocation.collectAsStateWithLifecycle()
+    val cameraTarget by viewModel.cameraTarget.collectAsStateWithLifecycle()
+    val liveRoute by viewModel.liveRoute.collectAsStateWithLifecycle()
+    val trackingState by viewModel.trackingState.collectAsStateWithLifecycle()
+
+    var isMapMode by remember { mutableStateOf(false) }
+    var selectedMapRequest by remember { mutableStateOf<ServiceRequest?>(null) }
+    var customBidTarget by remember { mutableStateOf<ServiceRequest?>(null) }
+
+    val craftsmanLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            viewModel.fetchCurrentGpsLocation(context)
+            viewModel.refreshLocationTracking(context)
+        } else {
+            viewModel.showMessage("يرجى السماح بصلاحية الموقع لتحديد مكانك")
+        }
+    }
+
+    val activeCraftsmanJob = allRequests.firstOrNull {
+        it.assignedCraftsmanId == session.userId &&
+            it.categoryId == session.craftsmanSpecialtyId &&
+            it.status != RequestStatus.COMPLETED &&
+            it.status != RequestStatus.CANCELLED
+    }
+
+    LaunchedEffect(activeCraftsmanJob?.id, activeCraftsmanJob?.status) {
+        if (activeCraftsmanJob != null) {
+            viewModel.refreshLocationTracking(context)
+        }
+    }
+
+    val completedToday = allRequests.filter {
+        it.status == RequestStatus.COMPLETED &&
+            it.assignedCraftsmanId == session.userId &&
+            it.categoryId == session.craftsmanSpecialtyId
+    }
+    val totalEarningsDh = completedToday.sumOf { it.acceptedPrice ?: it.proposedPrice }
+    val cityCoord = MoroccanLocations.coordForCity(session.city)
+    val lockedCategory = HirafiCategories.byId(session.craftsmanSpecialtyId)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        // Authentic inDrive Driver Header
+        Surface(
+            color = ObsidianBlack,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onOpenDrawer,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("craftsman_drawer_button")
+                    ) {
+                        Icon(Icons.Rounded.Menu, contentDescription = "القائمة", tint = Color.White)
+                    }
+
+                    // Iconic inDrive Driver Online/Offline Pill
+                    Surface(
+                        color = if (session.isCraftsmanOnline) ElectricLime else Color(0xFF262A31),
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 2.dp, bottom = 2.dp)
+                        ) {
+                            Text(
+                                text = if (session.isCraftsmanOnline) "متاح • أستقبل الطلبات" else "غير متصل",
+                                color = if (session.isCraftsmanOnline) ObsidianBlack else Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Switch(
+                                checked = session.isCraftsmanOnline,
+                                onCheckedChange = { viewModel.toggleCraftsmanOnline(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = ObsidianBlack,
+                                    checkedTrackColor = Color.White.copy(alpha = 0.65f),
+                                    uncheckedThumbColor = Color.White,
+                                    uncheckedTrackColor = Color(0xFF3E444F)
+                                ),
+                                modifier = Modifier.testTag("craftsman_online_switch")
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = Color(0xFF262A31),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .clickable { viewModel.switchRole(UserRole.CLIENT) }
+                            .testTag("switch_to_client_pill")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Icon(Icons.Rounded.Person, contentDescription = "وضع الزبون", tint = ElectricLime, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("زبون", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    DriverStatCard(
+                        title = "أرباحك اليوم",
+                        value = "$totalEarningsDh د.م",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DriverStatCard(
+                        title = "طلبات مهنتك",
+                        value = "${openRequests.size}",
+                        modifier = Modifier.weight(0.9f)
+                    )
+                    DriverStatCard(
+                        title = if (session.isCraftsmanSpecialtyLocked) "مهنتك المعتمدة 🔒" else "المهنة",
+                        value = if (session.isCraftsmanSpecialtyLocked) lockedCategory.nameAr else "غير محددة",
+                        modifier = Modifier.weight(1.25f)
+                    )
+                }
+            }
+        }
+
+        if (!session.isCraftsmanSpecialtyLocked) {
+            // Mandatory Single-Profession Selection Gate
+            SingleProfessionSelectionGate(
+                initialSelection = session.craftsmanSpecialtyId,
+                onConfirmSingleSpecialty = { selectedId ->
+                    viewModel.setCraftsmanSpecialty(selectedId)
+                },
+                modifier = Modifier.weight(1f)
+            )
+        } else {
+            // Single-Profession Info Strip + inDrive List/Map Toggle (ZERO cross-trade tabs)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(lockedCategory.accentColor.copy(alpha = 0.14f))
+                        ) {
+                            Icon(
+                                imageVector = lockedCategory.icon,
+                                contentDescription = null,
+                                tint = lockedCategory.accentColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "مهنتك: ${lockedCategory.nameAr}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Rounded.Lock,
+                                    contentDescription = "مهنة واحدة مقفلة",
+                                    tint = VerifiedEmerald,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            Text(
+                                text = "تظهر طلبات ${lockedCategory.nameAr} فقط • خصوصية العروض مفعّلة",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Surface(
+                    color = ObsidianBlack,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .clickable { isMapMode = !isMapMode }
+                        .testTag("craftsman_map_list_toggle")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isMapMode) Icons.AutoMirrored.Rounded.FormatListBulleted else Icons.Rounded.Map,
+                            contentDescription = if (isMapMode) "عرض القائمة" else "عرض الخريطة",
+                            tint = ElectricLime,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (isMapMode) "قائمة" else "خريطة",
+                            color = ElectricLime,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            if (isMapMode) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    val mapPins = buildList {
+                        if (session.isCraftsmanOnline) addAll(openRequests)
+                        if (activeCraftsmanJob != null && none { it.id == activeCraftsmanJob.id }) {
+                            add(activeCraftsmanJob)
+                        }
+                    }
+                    HirafiRealMap(
+                        centerLat = activeCraftsmanJob?.lat ?: userGps?.first ?: cityCoord.lat,
+                        centerLng = activeCraftsmanJob?.lng ?: userGps?.second ?: cityCoord.lng,
+                        cameraTarget = cameraTarget,
+                        onCameraTargetConsumed = { viewModel.consumeCameraTarget() },
+                        selectedCategoryId = session.craftsmanSpecialtyId,
+                        craftsmen = emptyList(),
+                        clientRequestsOnMap = mapPins,
+                        activeRequest = activeCraftsmanJob,
+                        liveRoute = liveRoute,
+                        userGpsLocation = userGps,
+                        isCraftsmanMode = true,
+                        onMapCenterChanged = { _, _ -> },
+                        onClientRequestPinClick = { req ->
+                            if (req.id != activeCraftsmanJob?.id && req.categoryId == session.craftsmanSpecialtyId) {
+                                selectedMapRequest = req
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) {
+                                    viewModel.fetchCurrentGpsLocation(context)
+                                } else {
+                                    craftsmanLocationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("craftsman_gps_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MyLocation,
+                                contentDescription = "تحديد موقعي عبر GPS",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    val overlayRequest = selectedMapRequest
+                    if (overlayRequest != null) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(12.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Surface(
+                                    color = ObsidianBlack,
+                                    shape = CircleShape,
+                                    modifier = Modifier.align(Alignment.End)
+                                ) {
+                                    IconButton(onClick = { selectedMapRequest = null }) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "إغلاق", tint = Color.White)
+                                    }
+                                }
+                                val distKm = MapRoutingService.haversineKm(
+                                    userGps?.first ?: cityCoord.lat,
+                                    userGps?.second ?: cityCoord.lng,
+                                    overlayRequest.lat,
+                                    overlayRequest.lng
+                                )
+                                InDriveDriverRequestCard(
+                                    request = overlayRequest,
+                                    distanceKm = distKm,
+                                    onAcceptAtPrice = {
+                                        viewModel.craftsmanAcceptAtClientPrice(overlayRequest.id)
+                                        selectedMapRequest = null
+                                    },
+                                    onQuickCounter = { delta ->
+                                        viewModel.craftsmanSubmitCounterOffer(
+                                            requestId = overlayRequest.id,
+                                            offeredPrice = overlayRequest.proposedPrice + delta,
+                                            etaMinutes = 10,
+                                            note = "عرض سريع من الحرفي"
+                                        )
+                                        selectedMapRequest = null
+                                    },
+                                    onCustomBid = {
+                                        customBidTarget = overlayRequest
+                                        selectedMapRequest = null
+                                    }
+                                )
+                            }
+                        }
+                    } else if (activeCraftsmanJob != null) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(12.dp)
+                        ) {
+                            DriverActiveJobCard(
+                                request = activeCraftsmanJob,
+                                liveRoute = liveRoute,
+                                trackingState = trackingState,
+                                onRequestTrackingPermission = {
+                                    craftsmanLocationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                },
+                                onNavigate = {
+                                    val navUri = Uri.parse("geo:${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}?q=${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}(${Uri.encode(activeCraftsmanJob.clientName)})")
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, navUri))
+                                    }.onFailure {
+                                        viewModel.showMessage("يرجى تثبيت تطبيق خرائط للملاحة الخارجية")
+                                    }
+                                },
+                                onCall = {
+                                    val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+212612345678"))
+                                    runCatching { context.startActivity(dial) }
+                                },
+                                onChat = { onOpenChat(activeCraftsmanJob.id) },
+                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
+                            )
+                        }
+                    } else if (activeCraftsmanJob != null) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(12.dp)
+                        ) {
+                            DriverActiveJobCard(
+                                request = activeCraftsmanJob,
+                                liveRoute = liveRoute,
+                                trackingState = trackingState,
+                                onRequestTrackingPermission = {
+                                    craftsmanLocationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                },
+                                onNavigate = {
+                                    val navUri = Uri.parse("geo:${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}?q=${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}(${Uri.encode(activeCraftsmanJob.clientName)})")
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, navUri))
+                                    }.onFailure {
+                                        viewModel.showMessage("يرجى تثبيت تطبيق خرائط للملاحة الخارجية")
+                                    }
+                                },
+                                onCall = {
+                                    val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+212612345678"))
+                                    runCatching { context.startActivity(dial) }
+                                },
+                                onChat = { onOpenChat(activeCraftsmanJob.id) },
+                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (activeCraftsmanJob != null) {
+                        item {
+                            DriverActiveJobCard(
+                                request = activeCraftsmanJob,
+                                liveRoute = liveRoute,
+                                trackingState = trackingState,
+                                onRequestTrackingPermission = {
+                                    craftsmanLocationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                },
+                                onNavigate = {
+                                    val navUri = Uri.parse("geo:${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}?q=${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}(${Uri.encode(activeCraftsmanJob.clientName)})")
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, navUri))
+                                    }.onFailure {
+                                        viewModel.showMessage("يرجى تثبيت تطبيق خرائط للملاحة الخارجية")
+                                    }
+                                },
+                                onCall = {
+                                    val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+212612345678"))
+                                    runCatching { context.startActivity(dial) }
+                                },
+                                onChat = { onOpenChat(activeCraftsmanJob.id) },
+                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
+                            )
+                        }
+                    }
+
+                    if (!session.isCraftsmanOnline) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp))
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(28.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Build, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
+                                    Spacer(Modifier.height(10.dp))
+                                    Text("أنت غير متصل حالياً", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = "فعّل زر الاتصال بالأعلى لاستقبال طلبات ${lockedCategory.nameAr} وتقديم عروضك.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    } else if (openRequests.isEmpty()) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp))
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(28.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Schedule, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(42.dp))
+                                    Spacer(Modifier.height(10.dp))
+                                    Text("لا توجد طلبات جديدة في تخصص ${lockedCategory.nameAr}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = "حسابك مقتصر على مهنة ${lockedCategory.nameAr} فقط، وسيظهر أي طلب جديد هنا فوراً.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        items(openRequests, key = { it.id }) { req ->
+                            val distKm = MapRoutingService.haversineKm(
+                                userGps?.first ?: cityCoord.lat,
+                                userGps?.second ?: cityCoord.lng,
+                                req.lat,
+                                req.lng
+                            )
+                            InDriveDriverRequestCard(
+                                request = req,
+                                distanceKm = distKm,
+                                onAcceptAtPrice = { viewModel.craftsmanAcceptAtClientPrice(req.id) },
+                                onQuickCounter = { delta ->
+                                    viewModel.craftsmanSubmitCounterOffer(
+                                        requestId = req.id,
+                                        offeredPrice = req.proposedPrice + delta,
+                                        etaMinutes = 10,
+                                        note = "عرض سريع من الحرفي"
+                                    )
+                                },
+                                onCustomBid = { customBidTarget = req }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    customBidTarget?.let { targetReq ->
+        RealtimeBiddingBottomSheet(
+            viewModel = biddingViewModel,
+            request = targetReq,
+            roleOverride = UserRole.CRAFTSMAN,
+            onDismiss = { customBidTarget = null },
+            onCompletedOrAccepted = { customBidTarget = null }
+        )
+    }
+}
+
+@Composable
+private fun SingleProfessionSelectionGate(
+    initialSelection: String,
+    onConfirmSingleSpecialty: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var pickedId by remember(initialSelection) { mutableStateOf(initialSelection) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = ObsidianBlack),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Rounded.Lock, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(22.dp))
+                    Text(
+                        text = "تحديد مهنة واحدة فقط",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
+                }
+                Text(
+                    text = "اختر مهنتك الأساسية التي تتقنها. بعد التأكيد يتم تثبيت هذه المهنة على حسابك، ولا يمكنك مشاهدة طلبات أو عروض الحرفيين في المهن الأخرى.",
+                    color = Color(0xFFB8C0CC),
+                    fontSize = 12.sp
+                )
+                Surface(
+                    color = Color(0xFF262A31),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                    ) {
+                        Icon(Icons.Rounded.VisibilityOff, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "حماية العروض: كل حرفي يرى طلبات مهنته وعروضه الخاصة فقط",
+                            color = ElectricLime,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+
+        HirafiCategories.all.forEach { cat ->
+            val selected = cat.id == pickedId
+            Surface(
+                color = if (selected) ElectricLimeSoft else MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        width = if (selected) 2.dp else 1.dp,
+                        color = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .clickable { pickedId = cat.id }
+                    .testTag("select_single_profession_${cat.id}")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(cat.accentColor.copy(alpha = 0.14f))
+                        ) {
+                            Icon(cat.icon, contentDescription = null, tint = cat.accentColor, modifier = Modifier.size(22.dp))
+                        }
+                        Column {
+                            Text(
+                                text = cat.nameAr,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = "متوسط الأجرة: ${cat.minRecommendedDh} - ${cat.maxRecommendedDh} د.م",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = if (selected) Icons.Rounded.RadioButtonChecked else Icons.Rounded.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+
+        val chosen = HirafiCategories.byId(pickedId)
+        Button(
+            onClick = { onConfirmSingleSpecialty(pickedId) },
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .testTag("confirm_single_profession_button")
+        ) {
+            Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "تأكيد مهنتي الوحيدة (${chosen.nameAr})",
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun DriverStatCard(title: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        color = Color(0xFF20242A),
+        shape = RoundedCornerShape(14.dp),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
+            Text(title, color = Color(0xFF98A2B3), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(2.dp))
+            Text(value, color = ElectricLime, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun InDriveDriverRequestCard(
+    request: ServiceRequest,
+    distanceKm: Double,
+    onAcceptAtPrice: () -> Unit,
+    onQuickCounter: (Int) -> Unit,
+    onCustomBid: () -> Unit
+) {
+    val category = HirafiCategories.byId(request.categoryId)
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp))
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Text(
+                            text = request.clientName.take(1),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = request.clientName,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(color = VerifiedEmeraldSoft, shape = RoundedCornerShape(8.dp)) {
+                                Text(
+                                    text = "$distanceKm كم عنك",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = VerifiedEmerald,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = request.paymentMethod.labelAr,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "${request.proposedPrice} د.م",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (request.isUrgent) {
+                        Surface(color = UrgentCoralSoft, shape = RoundedCornerShape(8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Rounded.Bolt, contentDescription = null, tint = UrgentCoral, modifier = Modifier.size(12.dp))
+                                Text("عاجل", color = UrgentCoral, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pickup & Problem Pill (inDrive style)
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(VerifiedEmerald)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = request.addressLabel,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(category.icon, contentDescription = null, tint = category.accentColor, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = request.title,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    if (request.description.isNotBlank()) {
+                        Text(
+                            text = request.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Signature inDrive Driver Accept Button
+            Button(
+                onClick = onAcceptAtPrice,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("craftsman_accept_${request.id}")
+            ) {
+                Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("قبول بـ ${request.proposedPrice} د.م", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onQuickCounter(20) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                ) {
+                    Text("${request.proposedPrice + 20} د.م", fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = { onQuickCounter(40) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                ) {
+                    Text("${request.proposedPrice + 40} د.م", fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = onCustomBid,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1.25f)
+                        .height(48.dp)
+                ) {
+                    Text("سعر مخصص", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DriverActiveJobCard(
+    request: ServiceRequest,
+    liveRoute: LiveRouteState,
+    trackingState: LiveTrackingState,
+    onRequestTrackingPermission: () -> Unit,
+    onNavigate: () -> Unit,
+    onCall: () -> Unit,
+    onChat: () -> Unit,
+    onAdvance: (RequestStatus) -> Unit
+) {
+    val nextAction: Pair<String, RequestStatus>? = when (request.status) {
+        RequestStatus.ACCEPTED -> "أنا في الطريق" to RequestStatus.EN_ROUTE
+        RequestStatus.EN_ROUTE -> "وصلت لموقع الزبون" to RequestStatus.ARRIVED
+        RequestStatus.ARRIVED -> "بدأت العمل" to RequestStatus.IN_PROGRESS
+        RequestStatus.IN_PROGRESS -> "إنهاء وتحصيل ${request.acceptedPrice ?: request.proposedPrice} د.م" to RequestStatus.COMPLETED
+        else -> null
+    }
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = ObsidianBlack),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(color = ElectricLimeSoft, shape = RoundedCornerShape(10.dp)) {
+                    Text(
+                        text = "الطلب الجاري: ${request.status.labelAr}",
+                        color = ObsidianBlack,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+                Text(
+                    text = "${request.acceptedPrice ?: request.proposedPrice} د.م",
+                    color = ElectricLime,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 20.sp
+                )
+            }
+
+            Text(request.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("${request.clientName} • ${request.addressLabel}", color = Color(0xFFB8C0CC), fontSize = 13.sp)
+            }
+
+            if (liveRoute.etaMinutes > 0 || liveRoute.remainingDistanceKm > 0.0) {
+                Surface(
+                    color = Color(0xFF20242A),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "المسار المباشر للزبون: ${liveRoute.etaMinutes} دقيقة (${liveRoute.remainingDistanceKm} كم)",
+                        color = ElectricLime,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            if (trackingState.hasLocationPermission) {
+                val accText = trackingState.latestFix?.accuracyMeters?.takeIf { it > 0f }?.let { " • دقة ${it.toInt()} م" }.orEmpty()
+                Surface(
+                    color = VerifiedEmerald.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Rounded.GpsFixed, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "خدمة تتبع الموقع GPS المباشر نشطة$accText",
+                            color = VerifiedEmerald,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onRequestTrackingPermission,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("enable_craftsman_gps_tracking_button")
+                ) {
+                    Icon(Icons.Rounded.MyLocation, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("تفعيل التتبع المباشر لموقعك (GPS)", color = ElectricLime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onNavigate,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Icon(Icons.Rounded.Navigation, contentDescription = "توجيه GPS", tint = ElectricLime)
+                }
+                OutlinedButton(
+                    onClick = onCall,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Icon(Icons.Rounded.Call, contentDescription = "اتصال", tint = ElectricLime)
+                }
+                OutlinedButton(
+                    onClick = onChat,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "محادثة", tint = ElectricLime)
+                }
+                if (nextAction != null) {
+                    Button(
+                        onClick = { onAdvance(nextAction.second) },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                    ) {
+                        Text(nextAction.first, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
