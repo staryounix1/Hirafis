@@ -8,11 +8,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -98,10 +106,13 @@ import com.example.ui.components.ActiveJobSheet
 import com.example.ui.components.CraftsmanDetailDialog
 import com.example.ui.components.HirafiRealMap
 import com.example.ui.components.IncomingOfferCard
+import com.example.ui.components.LiveDispatchSonarOverlay
 import com.example.ui.components.NearbyCraftsmenSearchSheet
 import com.example.ui.components.PriceProposalBar
 import com.example.ui.components.RatingDialog
 import com.example.ui.components.RealtimeBiddingBottomSheet
+import com.example.ui.components.SheetDragHandleBar
+import com.example.ui.components.SmartTriageCarousel
 import com.example.ui.theme.ElectricLime
 import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
@@ -143,6 +154,8 @@ fun ClientHomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedPinPreview by remember { mutableStateOf<CraftsmanPin?>(null) }
     var isDetailsExpanded by remember { mutableStateOf(false) }
+    var isPassengerSheetExpanded by remember { mutableStateOf(true) }
+    var isSearchingSheetExpanded by remember { mutableStateOf(true) }
 
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -172,7 +185,8 @@ fun ClientHomeScreen(
 
     val selectedCategory = HirafiCategories.byId(draft.selectedCategoryId)
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val maxSheetBodyHeight = (maxHeight * 0.64f).coerceAtLeast(280.dp)
         // 1. Live inDrive-style real CARTO / OSM map
         HirafiRealMap(
             centerLat = activeRequest?.lat ?: draft.lat,
@@ -189,6 +203,17 @@ fun ClientHomeScreen(
             onCraftsmanPinClick = { pin -> selectedPinPreview = pin },
             modifier = Modifier.fillMaxSize()
         )
+
+        if (activeRequest?.status == RequestStatus.SEARCHING) {
+            val req = activeRequest!!
+            LiveDispatchSonarOverlay(
+                createdAtMillis = req.createdAtMillis,
+                nowMillis = nowMillis,
+                categoryName = req.categoryName,
+                radiusKm = searchRadiusKm,
+                offersCount = sortedOffers.size
+            )
+        }
 
         // 2. Iconic inDrive Passenger Top Floating HUD
         Column(
@@ -272,37 +297,6 @@ fun ClientHomeScreen(
                         }
                     }
                 }
-
-                // Quick Switch to Craftsman Mode
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = ObsidianBlack,
-                    shadowElevation = 8.dp,
-                    modifier = Modifier
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .clickable { viewModel.switchRole(UserRole.CRAFTSMAN) }
-                        .testTag("quick_craftsman_mode_pill")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 14.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Build,
-                            contentDescription = "وضع الحرفي",
-                            tint = ElectricLime,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            text = "حرفي",
-                            color = ElectricLime,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                }
             }
 
             // GPS Locate Pill on Map
@@ -352,52 +346,121 @@ fun ClientHomeScreen(
         ) {
             when {
                 activeRequest == null -> {
-                    // STATE A: Authentic inDrive Passenger Service Sheet
+                    // STATE A: Authentic inDrive Passenger Service Sheet (Draggable & Clickable Up/Down)
                     Card(
                         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                .padding(horizontal = 16.dp)
+                                .padding(bottom = 14.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .width(42.dp)
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(MaterialTheme.colorScheme.outline)
+                            SheetDragHandleBar(
+                                isExpanded = isPassengerSheetExpanded,
+                                onToggle = { isPassengerSheetExpanded = !isPassengerSheetExpanded },
+                                onExpandChange = { isPassengerSheetExpanded = it }
                             )
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "ما الخدمة التي تحتاجها؟",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                TextButton(onClick = { isDetailsExpanded = !isDetailsExpanded }) {
-                                    Text(
-                                        if (isDetailsExpanded) "إخفاء التفاصيل" else "صورة وتفاصيل",
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Icon(
-                                        imageVector = if (isDetailsExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                            if (!isPassengerSheetExpanded) {
+                                // Compact Peek Dock when scrolled/collapsed down
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 2.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        color = ObsidianBlack,
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .clickable { isPassengerSheetExpanded = true }
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = selectedCategory.icon,
+                                                contentDescription = null,
+                                                tint = ElectricLime,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = selectedCategory.nameAr,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = { viewModel.submitServiceRequest() },
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = ElectricLime,
+                                            contentColor = ObsidianBlack
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("collapsed_find_craftsman_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "ابحث بـ ${draft.proposedPrice} د.م",
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 14.sp
+                                        )
+                                    }
                                 }
                             }
+
+                            AnimatedVisibility(
+                                visible = isPassengerSheetExpanded,
+                                enter = expandVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                                exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = maxSheetBodyHeight)
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "ما الخدمة التي تحتاجها؟",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                        TextButton(onClick = { isDetailsExpanded = !isDetailsExpanded }) {
+                                            Text(
+                                                if (isDetailsExpanded) "إخفاء التفاصيل" else "صورة وتفاصيل",
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Icon(
+                                                imageVector = if (isDetailsExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
 
                             // inDrive Service Tiles Strip
                             LazyRow(
@@ -516,6 +579,17 @@ fun ClientHomeScreen(
                                 }
                             }
 
+                            SmartTriageCarousel(
+                                selectedCategoryId = draft.selectedCategoryId,
+                                currentTitle = draft.title,
+                                onSelectScenario = { scenario ->
+                                    viewModel.updateDraftTitle(scenario.titleAr)
+                                    viewModel.updateDraftDescription(scenario.descriptionAr)
+                                    viewModel.setDraftPrice(scenario.recommendedPriceDh)
+                                    viewModel.toggleUrgent(scenario.isUrgentSuggested)
+                                }
+                            )
+
                             OutlinedTextField(
                                 value = draft.title,
                                 onValueChange = { viewModel.updateDraftTitle(it) },
@@ -613,25 +687,27 @@ fun ClientHomeScreen(
                                 onSetExact = { viewModel.setDraftPrice(it) }
                             )
 
-                            Button(
-                                onClick = { viewModel.submitServiceRequest() },
-                                shape = RoundedCornerShape(18.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = ElectricLime,
-                                    contentColor = ObsidianBlack
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                                    .testTag("find_craftsman_button")
-                            ) {
-                                Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(22.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "البحث عن حرفي بـ ${draft.proposedPrice} د.م",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
+                                    Button(
+                                        onClick = { viewModel.submitServiceRequest() },
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = ElectricLime,
+                                            contentColor = ObsidianBlack
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(54.dp)
+                                            .testTag("find_craftsman_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(22.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "البحث عن حرفي بـ ${draft.proposedPrice} د.م",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -679,9 +755,17 @@ fun ClientHomeScreen(
                             shape = RoundedCornerShape(26.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
+                            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                SheetDragHandleBar(
+                                    isExpanded = isSearchingSheetExpanded,
+                                    onToggle = { isSearchingSheetExpanded = !isSearchingSheetExpanded },
+                                    onExpandChange = { isSearchingSheetExpanded = it }
+                                )
+
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -712,6 +796,13 @@ fun ClientHomeScreen(
                                         Icon(Icons.Rounded.Close, contentDescription = "إلغاء الطلب", tint = UrgentCoral)
                                     }
                                 }
+
+                                AnimatedVisibility(
+                                    visible = isSearchingSheetExpanded,
+                                    enter = expandVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                                    exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut()
+                                ) {
+                                    Column {
 
                                 Spacer(Modifier.height(8.dp))
                                 LazyRow(
@@ -822,6 +913,8 @@ fun ClientHomeScreen(
                                             .height(48.dp)
                                     ) {
                                         Text("+20 د.م", fontWeight = FontWeight.Bold)
+                                    }
+                                }
                                     }
                                 }
                             }

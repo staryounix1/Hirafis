@@ -81,12 +81,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.location.LiveTrackingState
 import com.example.data.model.HirafiCategories
+import com.example.data.model.JobHandshakeSecurity
 import com.example.data.model.LiveRouteState
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.remote.MapRoutingService
+import com.example.ui.components.CraftsmanHandshakePinVerifier
 import com.example.ui.components.HirafiRealMap
 import com.example.ui.components.RealtimeBiddingBottomSheet
 import com.example.ui.theme.ElectricLime
@@ -214,17 +216,15 @@ fun CraftsmanDashboardScreen(
                     Surface(
                         color = Color(0xFF262A31),
                         shape = RoundedCornerShape(18.dp),
-                        modifier = Modifier
-                            .clickable { viewModel.switchRole(UserRole.CLIENT) }
-                            .testTag("switch_to_client_pill")
+                        modifier = Modifier.testTag("craftsman_locked_mode_badge")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
-                            Icon(Icons.Rounded.Person, contentDescription = "وضع الزبون", tint = ElectricLime, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Lock, contentDescription = "حساب حرفي", tint = ElectricLime, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("زبون", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("حرفي", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -467,40 +467,6 @@ fun CraftsmanDashboardScreen(
                                     }
                                 )
                             }
-                        }
-                    } else if (activeCraftsmanJob != null) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(12.dp)
-                        ) {
-                            DriverActiveJobCard(
-                                request = activeCraftsmanJob,
-                                liveRoute = liveRoute,
-                                trackingState = trackingState,
-                                onRequestTrackingPermission = {
-                                    craftsmanLocationLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
-                                    )
-                                },
-                                onNavigate = {
-                                    val navUri = Uri.parse("geo:${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}?q=${activeCraftsmanJob.lat},${activeCraftsmanJob.lng}(${Uri.encode(activeCraftsmanJob.clientName)})")
-                                    runCatching {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, navUri))
-                                    }.onFailure {
-                                        viewModel.showMessage("يرجى تثبيت تطبيق خرائط للملاحة الخارجية")
-                                    }
-                                },
-                                onCall = {
-                                    val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+212612345678"))
-                                    runCatching { context.startActivity(dial) }
-                                },
-                                onChat = { onOpenChat(activeCraftsmanJob.id) },
-                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
-                            )
                         }
                     } else if (activeCraftsmanJob != null) {
                         Box(
@@ -1014,6 +980,10 @@ private fun DriverActiveJobCard(
         RequestStatus.IN_PROGRESS -> "إنهاء وتحصيل ${request.acceptedPrice ?: request.proposedPrice} د.م" to RequestStatus.COMPLETED
         else -> null
     }
+    var isPinVerified by remember(request.id) { mutableStateOf(false) }
+    val expectedPin = remember(request.id, request.clientId, request.categoryId) {
+        JobHandshakeSecurity.deriveSecurityPin(request)
+    }
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -1063,6 +1033,14 @@ private fun DriverActiveJobCard(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
+            }
+
+            if (request.status == RequestStatus.ARRIVED) {
+                CraftsmanHandshakePinVerifier(
+                    expectedPin = expectedPin,
+                    isVerified = isPinVerified,
+                    onVerified = { isPinVerified = true }
+                )
             }
 
             if (trackingState.hasLocationPermission) {
@@ -1124,15 +1102,28 @@ private fun DriverActiveJobCard(
                     Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "محادثة", tint = ElectricLime)
                 }
                 if (nextAction != null) {
+                    val canAdvance = request.status != RequestStatus.ARRIVED || isPinVerified
                     Button(
                         onClick = { onAdvance(nextAction.second) },
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                        enabled = canAdvance,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricLime,
+                            contentColor = ObsidianBlack,
+                            disabledContainerColor = Color(0xFF2E333B),
+                            disabledContentColor = Color(0xFF8A94A3)
+                        ),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
+                            .testTag("driver_advance_job_button")
                     ) {
-                        Text(nextAction.first, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = if (canAdvance) nextAction.first else "أدخل الرمز للبدء",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }

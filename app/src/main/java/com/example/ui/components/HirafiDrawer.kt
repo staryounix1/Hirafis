@@ -2,7 +2,6 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,18 +15,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LocationCity
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -36,9 +38,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,22 +56,30 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.AccountRolePolicy
 import com.example.data.model.HirafiCategories
+import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.ui.theme.ElectricLime
+import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
+import com.example.ui.theme.UrgentCoral
+import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.VerifiedEmeraldSoft
 
 @Composable
 fun HirafiDrawerContent(
     session: UserSession,
     currentRoute: String,
     onNavigate: (String) -> Unit,
-    onSwitchRole: (UserRole) -> Unit,
-    onCityClick: () -> Unit
+    onCityClick: () -> Unit,
+    onLogout: () -> Unit
 ) {
+    var showLogoutDialog by remember { mutableStateOf(false) }
+
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.surface,
         modifier = Modifier.width(305.dp)
@@ -76,7 +92,11 @@ fun HirafiDrawerContent(
                 .padding(16.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 // Authentic inDrive Clean Profile Header
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -103,12 +123,25 @@ fun HirafiDrawerContent(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = session.fullName,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text(
+                                text = session.fullName,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                            if (session.isCraftsmanVerified) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Verified,
+                                    contentDescription = "هوية موثقة",
+                                    tint = VerifiedEmerald,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -119,6 +152,14 @@ fun HirafiDrawerContent(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (session.email.isNotBlank()) {
+                            Text(
+                                text = session.email,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                maxLines = 1
                             )
                         }
                         if (session.role == UserRole.CRAFTSMAN && session.isCraftsmanSpecialtyLocked) {
@@ -150,11 +191,31 @@ fun HirafiDrawerContent(
                     onClick = { onNavigate("home") }
                 )
                 DrawerNavItem(
-                    label = "سجل الطلبات",
+                    label = "سجل الطلبات والضمانات",
                     icon = Icons.Rounded.History,
                     selected = currentRoute == "orders",
                     onClick = { onNavigate("orders") }
                 )
+                if (AccountRolePolicy.canAccessIdentityVerification(session)) {
+                    val (badgeLabel, badgeContainer, badgeTextColor) = when (session.verificationStatus) {
+                        IdentityVerificationStatus.VERIFIED ->
+                            Triple("موثّق ✓", VerifiedEmeraldSoft, VerifiedEmerald)
+                        IdentityVerificationStatus.PENDING_REVIEW ->
+                            Triple("قيد المراجعة", ElectricLimeSoft, ObsidianBlack)
+                        IdentityVerificationStatus.NOT_SUBMITTED ->
+                            Triple("مطلوب", UrgentCoralSoft, UrgentCoral)
+                    }
+                    DrawerNavItem(
+                        label = "التحقق من الهوية",
+                        icon = Icons.Rounded.VerifiedUser,
+                        selected = currentRoute == "verification",
+                        badgeText = badgeLabel,
+                        badgeContainerColor = badgeContainer,
+                        badgeTextColor = badgeTextColor,
+                        onClick = { onNavigate("verification") },
+                        testTag = "drawer_identity_verification_item"
+                    )
+                }
                 DrawerNavItem(
                     label = "الأمان والطوارئ",
                     icon = Icons.Rounded.Shield,
@@ -169,40 +230,124 @@ fun HirafiDrawerContent(
                 )
             }
 
-            // Signature inDrive Bottom Full-Width Neon Switcher
-            Column {
+            // Permanent Locked Account Indicator + Logout Action
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 HorizontalDivider()
-                Spacer(Modifier.height(12.dp))
-                val targetRole = if (session.role == UserRole.CLIENT) UserRole.CRAFTSMAN else UserRole.CLIENT
-                Button(
-                    onClick = { onSwitchRole(targetRole) },
+                Surface(
                     shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ElectricLime,
-                        contentColor = ObsidianBlack
+                    color = ObsidianBlack,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("locked_account_role_badge")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Lock,
+                            contentDescription = null,
+                            tint = ElectricLime,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (session.role == UserRole.CRAFTSMAN)
+                                    "حساب حرفي دائم (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
+                                else
+                                    "حساب زبون دائم",
+                                color = ElectricLime,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = if (session.role == UserRole.CRAFTSMAN)
+                                    "حساب مقفل — مخصص لوضع الحرفي فقط"
+                                else
+                                    "حساب مقفل — مخصص لوضع الزبون فقط",
+                                color = Color(0xFFB5BFC9),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { showLogoutDialog = true },
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
+                        contentColor = MaterialTheme.colorScheme.error
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
-                        .testTag("switch_role_button")
+                        .height(50.dp)
+                        .testTag("drawer_logout_button")
                 ) {
                     Icon(
-                        imageVector = if (targetRole == UserRole.CRAFTSMAN) Icons.Rounded.Build else Icons.Rounded.SwapHoriz,
+                        imageVector = Icons.AutoMirrored.Rounded.Logout,
                         contentDescription = null,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (targetRole == UserRole.CRAFTSMAN)
-                            "وضع الحرفي (السائق)"
-                        else
-                            "وضع الزبون (العميل)",
+                        text = "تسجيل الخروج من الحساب",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        fontSize = 14.sp
                     )
                 }
             }
         }
+    }
+
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.Logout,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = {
+                Text(
+                    text = "تسجيل الخروج",
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Text("هل أنت متأكد أنك تريد تسجيل الخروج من الحساب الحالي؟ ستتم العودة إلى شاشة تسجيل الحساب.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogoutDialog = false
+                        onLogout()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.testTag("confirm_logout_button")
+                ) {
+                    Text("خروج", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showLogoutDialog = false },
+                    modifier = Modifier.testTag("cancel_logout_button")
+                ) {
+                    Text("إلغاء")
+                }
+            }
+        )
     }
 }
 
@@ -211,11 +356,31 @@ private fun DrawerNavItem(
     label: String,
     icon: ImageVector,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    badgeText: String? = null,
+    badgeContainerColor: Color = ElectricLimeSoft,
+    badgeTextColor: Color = ObsidianBlack,
+    testTag: String? = null
 ) {
     NavigationDrawerItem(
         label = { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
         icon = { Icon(icon, contentDescription = null) },
+        badge = if (badgeText != null) {
+            {
+                Surface(
+                    color = badgeContainerColor,
+                    shape = RoundedCornerShape(99.dp)
+                ) {
+                    Text(
+                        text = badgeText,
+                        color = badgeTextColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+        } else null,
         selected = selected,
         onClick = onClick,
         colors = NavigationDrawerItemDefaults.colors(
@@ -224,6 +389,8 @@ private fun DrawerNavItem(
             selectedTextColor = ObsidianBlack
         ),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier
+            .padding(vertical = 2.dp)
+            .let { mod -> if (testTag != null) mod.testTag(testTag) else mod }
     )
 }

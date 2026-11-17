@@ -1,9 +1,17 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +34,8 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Shield
@@ -50,6 +60,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -207,6 +219,13 @@ fun PriceProposalBar(
                 }
             }
         }
+
+        Spacer(Modifier.height(10.dp))
+        AcceptanceRadarGauge(
+            priceDh = priceDh,
+            recommendedMin = recommendedMin,
+            recommendedMax = recommendedMax
+        )
     }
 
     if (showCustomDialog) {
@@ -506,6 +525,63 @@ fun IncomingOfferCard(
 }
 
 @Composable
+fun SheetDragHandleBar(
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    onExpandChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var cumulativeDrag by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onToggle() }
+            .pointerInput(isExpanded) {
+                detectVerticalDragGestures(
+                    onDragStart = { cumulativeDrag = 0f },
+                    onDragEnd = { cumulativeDrag = 0f },
+                    onDragCancel = { cumulativeDrag = 0f },
+                    onVerticalDrag = { _, dragAmount ->
+                        cumulativeDrag += dragAmount
+                        if (cumulativeDrag > 26f && isExpanded) {
+                            onExpandChange(false)
+                            cumulativeDrag = 0f
+                        } else if (cumulativeDrag < -26f && !isExpanded) {
+                            onExpandChange(true)
+                            cumulativeDrag = 0f
+                        }
+                    }
+                )
+            }
+            .testTag("sheet_drag_handle")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(46.dp)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(ElectricLime)
+            )
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = if (isExpanded) Icons.Rounded.KeyboardArrowDown else Icons.Rounded.KeyboardArrowUp,
+                contentDescription = if (isExpanded) "تصغير الشريط للأسفل" else "توسيع الشريط للأعلى",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
 fun ActiveJobSheet(
     request: ServiceRequest,
     liveRoute: LiveRouteState,
@@ -524,23 +600,22 @@ fun ActiveJobSheet(
         RequestStatus.COMPLETED
     )
     val currentIndex = steps.indexOf(request.status).coerceAtLeast(0)
+    var isExpanded by remember(request.id) { mutableStateOf(true) }
 
     Card(
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 14.dp),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .width(40.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.outline)
+        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
+            SheetDragHandleBar(
+                isExpanded = isExpanded,
+                onToggle = { isExpanded = !isExpanded },
+                onExpandChange = { isExpanded = it }
             )
-            Spacer(Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -613,117 +688,135 @@ fun ActiveJobSheet(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(ObsidianBlack)
+                Column {
+                    Spacer(Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = (request.assignedCraftsmanName ?: "ح").take(1),
-                            color = ElectricLime,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 20.sp
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = request.assignedCraftsmanName ?: "الحرفي المعتمد",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Icon(Icons.Rounded.Verified, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .clip(CircleShape)
+                                    .background(ObsidianBlack)
+                            ) {
+                                Text(
+                                    text = (request.assignedCraftsmanName ?: "ح").take(1),
+                                    color = ElectricLime,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 20.sp
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = request.assignedCraftsmanName ?: "الحرفي المعتمد",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Icon(Icons.Rounded.Verified, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
+                                }
+                                Text(
+                                    text = "${request.categoryName} • ★ ${request.assignedCraftsmanRating ?: 4.9}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Text(
-                            text = "${request.categoryName} • ★ ${request.assignedCraftsmanRating ?: 4.9}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconButton(
-                        onClick = { onCallClick(request.assignedCraftsmanPhone ?: "+212 600-000000") },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(VerifiedEmeraldSoft)
-                    ) {
-                        Icon(Icons.Rounded.Call, contentDescription = "اتصال", tint = VerifiedEmerald)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            IconButton(
+                                onClick = { onCallClick(request.assignedCraftsmanPhone ?: "+212 600-000000") },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(VerifiedEmeraldSoft)
+                            ) {
+                                Icon(Icons.Rounded.Call, contentDescription = "اتصال", tint = VerifiedEmerald)
+                            }
+                            IconButton(
+                                onClick = onChatClick,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(ObsidianBlack)
+                                    .testTag("open_chat_button")
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "محادثة", tint = ElectricLime)
+                            }
+                            IconButton(
+                                onClick = onSafetyClick,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(UrgentCoral.copy(alpha = 0.14f))
+                            ) {
+                                Icon(Icons.Rounded.Shield, contentDescription = "الأمان SOS", tint = UrgentCoral)
+                            }
+                        }
                     }
-                    IconButton(
-                        onClick = onChatClick,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(ObsidianBlack)
-                            .testTag("open_chat_button")
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "محادثة", tint = ElectricLime)
-                    }
-                    IconButton(
-                        onClick = onSafetyClick,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(UrgentCoral.copy(alpha = 0.14f))
-                    ) {
-                        Icon(Icons.Rounded.Shield, contentDescription = "الأمان SOS", tint = UrgentCoral)
-                    }
-                }
-            }
 
-            Spacer(Modifier.height(14.dp))
-
-            val nextAction: Pair<String, RequestStatus>? = when (request.status) {
-                RequestStatus.ACCEPTED -> "تأكيد انطلاق الحرفي" to RequestStatus.EN_ROUTE
-                RequestStatus.EN_ROUTE -> "تأكيد وصول الحرفي" to RequestStatus.ARRIVED
-                RequestStatus.ARRIVED -> "بدء العمل الآن" to RequestStatus.IN_PROGRESS
-                RequestStatus.IN_PROGRESS -> "إنهاء الخدمة وتقييم الحرفي" to RequestStatus.COMPLETED
-                else -> null
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (request.status == RequestStatus.ACCEPTED || request.status == RequestStatus.EN_ROUTE) {
-                    OutlinedButton(
-                        onClick = onCancel,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .weight(0.75f)
-                            .height(50.dp)
+                    if (request.status == RequestStatus.ACCEPTED ||
+                        request.status == RequestStatus.EN_ROUTE ||
+                        request.status == RequestStatus.ARRIVED ||
+                        request.status == RequestStatus.IN_PROGRESS
                     ) {
-                        Text("إلغاء", color = UrgentCoral, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(12.dp))
+                        JobHandshakePinBanner(request = request)
                     }
-                }
 
-                if (nextAction != null) {
-                    Button(
-                        onClick = { onAdvanceStatus(nextAction.second) },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
-                        modifier = Modifier
-                            .weight(1.5f)
-                            .height(50.dp)
-                            .testTag("advance_job_status_button")
-                    ) {
-                        Text(nextAction.first, fontWeight = FontWeight.ExtraBold)
+                    Spacer(Modifier.height(14.dp))
+
+                    val nextAction: Pair<String, RequestStatus>? = when (request.status) {
+                        RequestStatus.ACCEPTED -> "تأكيد انطلاق الحرفي" to RequestStatus.EN_ROUTE
+                        RequestStatus.EN_ROUTE -> "تأكيد وصول الحرفي" to RequestStatus.ARRIVED
+                        RequestStatus.ARRIVED -> "بدء العمل الآن" to RequestStatus.IN_PROGRESS
+                        RequestStatus.IN_PROGRESS -> "إنهاء الخدمة وتقييم الحرفي" to RequestStatus.COMPLETED
+                        else -> null
                     }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (request.status == RequestStatus.ACCEPTED || request.status == RequestStatus.EN_ROUTE) {
+                            OutlinedButton(
+                                onClick = onCancel,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(0.75f)
+                                    .height(50.dp)
+                            ) {
+                                Text("إلغاء", color = UrgentCoral, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (nextAction != null) {
+                            Button(
+                                onClick = { onAdvanceStatus(nextAction.second) },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                                modifier = Modifier
+                                    .weight(1.5f)
+                                    .height(50.dp)
+                                    .testTag("advance_job_status_button")
+                            ) {
+                                Text(nextAction.first, fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }

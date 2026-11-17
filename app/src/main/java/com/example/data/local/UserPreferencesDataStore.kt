@@ -5,8 +5,10 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import kotlinx.coroutines.flow.Flow
@@ -19,12 +21,22 @@ class UserPreferencesDataStore(private val context: Context) {
     private object Keys {
         val USER_ID = stringPreferencesKey("user_id")
         val FULL_NAME = stringPreferencesKey("full_name")
+        val EMAIL = stringPreferencesKey("user_email")
         val PHONE = stringPreferencesKey("phone")
         val CITY = stringPreferencesKey("city")
         val ROLE = stringPreferencesKey("role")
+        val ROLE_LOCKED = booleanPreferencesKey("role_locked")
         val SPECIALTY_ID = stringPreferencesKey("craftsman_specialty_id")
         val SPECIALTY_LOCKED = booleanPreferencesKey("craftsman_specialty_locked")
         val IS_ONLINE = booleanPreferencesKey("craftsman_is_online")
+        val AUTH_PROVIDER = stringPreferencesKey("auth_provider")
+        val PASSWORD_HASH = stringPreferencesKey("password_hash")
+        val VERIFICATION_STATUS = stringPreferencesKey("craftsman_verification_status")
+        val NATIONAL_ID_NUMBER = stringPreferencesKey("craftsman_national_id")
+        val ID_FRONT_URI = stringPreferencesKey("craftsman_id_front_uri")
+        val ID_BACK_URI = stringPreferencesKey("craftsman_id_back_uri")
+        val SELFIE_URI = stringPreferencesKey("craftsman_selfie_uri")
+        val VERIFICATION_SUBMITTED_AT = longPreferencesKey("craftsman_verification_submitted_at")
         val SUPABASE_EMAIL = stringPreferencesKey("supabase_email")
         val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
     }
@@ -34,19 +46,79 @@ class UserPreferencesDataStore(private val context: Context) {
         UserSession(
             userId = prefs[Keys.USER_ID] ?: "local_user",
             fullName = prefs[Keys.FULL_NAME] ?: "يونس العلمي",
+            email = prefs[Keys.EMAIL] ?: "",
             phone = prefs[Keys.PHONE] ?: "+212 612-345678",
             city = prefs[Keys.CITY] ?: "الدار البيضاء",
             role = if (roleDb == UserRole.CRAFTSMAN.dbValue) UserRole.CRAFTSMAN else UserRole.CLIENT,
+            isRoleLocked = prefs[Keys.ROLE_LOCKED] ?: false,
             craftsmanSpecialtyId = prefs[Keys.SPECIALTY_ID] ?: "plumbing",
             isCraftsmanSpecialtyLocked = prefs[Keys.SPECIALTY_LOCKED] ?: false,
             isCraftsmanOnline = prefs[Keys.IS_ONLINE] ?: true,
+            authProvider = prefs[Keys.AUTH_PROVIDER] ?: "email",
+            verificationStatus = IdentityVerificationStatus.fromDb(prefs[Keys.VERIFICATION_STATUS]),
+            nationalIdNumber = prefs[Keys.NATIONAL_ID_NUMBER] ?: "",
+            idFrontPhotoUri = prefs[Keys.ID_FRONT_URI],
+            idBackPhotoUri = prefs[Keys.ID_BACK_URI],
+            selfiePhotoUri = prefs[Keys.SELFIE_URI],
+            verificationSubmittedAtMillis = prefs[Keys.VERIFICATION_SUBMITTED_AT],
             supabaseEmail = prefs[Keys.SUPABASE_EMAIL],
             supabaseAccessToken = prefs[Keys.SUPABASE_ACCESS_TOKEN]
         )
     }
 
-    suspend fun setRole(role: UserRole) {
-        context.dataStore.edit { it[Keys.ROLE] = role.dbValue }
+    suspend fun setRole(role: UserRole): Boolean {
+        var changed = false
+        context.dataStore.edit { prefs ->
+            val locked = prefs[Keys.ROLE_LOCKED] ?: false
+            if (!locked) {
+                prefs[Keys.ROLE] = role.dbValue
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    suspend fun registerFirstTimeAccount(
+        fullName: String,
+        email: String = "",
+        phone: String = "+212 612-345678",
+        city: String,
+        role: UserRole,
+        specialtyId: String?,
+        passwordHash: String? = null,
+        authProvider: String = "email",
+        userIdOverride: String? = null
+    ): Boolean {
+        var registered = false
+        context.dataStore.edit { prefs ->
+            val alreadyLocked = prefs[Keys.ROLE_LOCKED] ?: false
+            if (!alreadyLocked) {
+                prefs[Keys.FULL_NAME] = fullName.trim()
+                if (email.isNotBlank()) prefs[Keys.EMAIL] = email.trim().lowercase()
+                if (phone.isNotBlank()) prefs[Keys.PHONE] = phone.trim()
+                prefs[Keys.CITY] = city
+                prefs[Keys.ROLE] = role.dbValue
+                prefs[Keys.ROLE_LOCKED] = true
+                prefs[Keys.AUTH_PROVIDER] = authProvider
+                if (!passwordHash.isNullOrBlank()) {
+                    prefs[Keys.PASSWORD_HASH] = passwordHash
+                }
+                if (!userIdOverride.isNullOrBlank()) {
+                    prefs[Keys.USER_ID] = userIdOverride
+                } else {
+                    val existingId = prefs[Keys.USER_ID]
+                    if (existingId.isNullOrBlank() || existingId == "local_user") {
+                        prefs[Keys.USER_ID] = "${role.dbValue}_${java.util.UUID.randomUUID().toString().take(8)}"
+                    }
+                }
+                if (role == UserRole.CRAFTSMAN && !specialtyId.isNullOrBlank()) {
+                    prefs[Keys.SPECIALTY_ID] = specialtyId
+                    prefs[Keys.SPECIALTY_LOCKED] = true
+                }
+                registered = true
+            }
+        }
+        return registered
     }
 
     suspend fun setCraftsmanOnline(isOnline: Boolean) {
@@ -91,6 +163,35 @@ class UserPreferencesDataStore(private val context: Context) {
             it.remove(Keys.SUPABASE_EMAIL)
             it.remove(Keys.SUPABASE_ACCESS_TOKEN)
             it[Keys.USER_ID] = "local_user"
+        }
+    }
+
+    suspend fun saveIdentityVerificationSubmission(
+        nationalIdNumber: String,
+        frontPhotoUri: String,
+        backPhotoUri: String,
+        selfiePhotoUri: String,
+        status: IdentityVerificationStatus
+    ) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.NATIONAL_ID_NUMBER] = nationalIdNumber
+            prefs[Keys.ID_FRONT_URI] = frontPhotoUri
+            prefs[Keys.ID_BACK_URI] = backPhotoUri
+            prefs[Keys.SELFIE_URI] = selfiePhotoUri
+            prefs[Keys.VERIFICATION_STATUS] = status.dbValue
+            prefs[Keys.VERIFICATION_SUBMITTED_AT] = System.currentTimeMillis()
+        }
+    }
+
+    suspend fun updateIdentityVerificationStatus(status: IdentityVerificationStatus) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.VERIFICATION_STATUS] = status.dbValue
+        }
+    }
+
+    suspend fun logoutAccount() {
+        context.dataStore.edit { prefs ->
+            prefs.clear()
         }
     }
 }

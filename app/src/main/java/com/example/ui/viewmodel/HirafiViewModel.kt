@@ -8,10 +8,12 @@ import com.example.data.location.LiveLocationBus
 import com.example.data.location.LiveTrackingState
 import com.example.data.location.RealTimeLocationService
 import com.example.data.location.RealTimeLocationSnapshot
+import com.example.data.model.AccountRolePolicy
 import com.example.data.model.ChatMessage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.HirafiCategories
+import com.example.data.model.IdentityVerificationValidator
 import com.example.data.model.LiveRouteState
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.OfferSortOption
@@ -942,8 +944,99 @@ class HirafiViewModel(
 
     fun switchRole(role: UserRole) {
         viewModelScope.launch {
-            repository.setRole(role)
-            showMessage(if (role == UserRole.CRAFTSMAN) "تم التبديل إلى وضع الحرفي" else "تم التبديل إلى وضع الزبون")
+            val current = userSession.value
+            if (current.isRoleLocked && current.role != role) {
+                showMessage("حسابك مسجل بشكل دائم كـ ${current.role.labelAr} ولا يمكن الدخول إلى وضع ${role.labelAr}")
+                return@launch
+            }
+            val changed = repository.setRole(role)
+            if (changed) {
+                showMessage(if (role == UserRole.CRAFTSMAN) "تم اختيار وضع الحرفي" else "تم اختيار وضع الزبون")
+            } else {
+                showMessage("حسابك مقفل كـ ${current.role.labelAr} ولا يمكن التبديل")
+            }
+        }
+    }
+
+    fun registerFirstTimeAccount(
+        fullName: String,
+        email: String = "",
+        password: String = "",
+        phone: String = "+212 612-345678",
+        city: String,
+        role: UserRole,
+        specialtyId: String?
+    ) {
+        val cleanName = fullName.trim()
+        val cleanEmail = com.example.data.model.LoginValidator.normalizeEmail(email)
+        if (!com.example.data.model.LoginValidator.isValidFullName(cleanName)) {
+            showMessage("يرجى إدخال الاسم الكامل (حرفان على الأقل)")
+            return
+        }
+        if (!com.example.data.model.LoginValidator.isValidEmail(cleanEmail)) {
+            showMessage("يرجى إدخال بريد إلكتروني صحيح")
+            return
+        }
+        if (!com.example.data.model.LoginValidator.isValidPassword(password)) {
+            showMessage("يجب أن تتكون كلمة السر من 6 أحرف على الأقل")
+            return
+        }
+        val hash = com.example.data.model.LoginValidator.hashPassword(cleanEmail, password)
+        viewModelScope.launch {
+            val registered = repository.registerFirstTimeAccount(
+                fullName = cleanName,
+                email = cleanEmail,
+                phone = phone.trim().ifBlank { "+212 612-345678" },
+                city = city,
+                role = role,
+                specialtyId = specialtyId,
+                passwordHash = hash,
+                authProvider = "email"
+            )
+            if (registered) {
+                val coord = MoroccanLocations.coordForCity(city)
+                selectNeighborhood(city, coord.lat, coord.lng)
+                showMessage(
+                    if (role == UserRole.CRAFTSMAN)
+                        "مرحباً $cleanName! تم تسجيل الدخول كحرفي (${HirafiCategories.byId(specialtyId ?: "plumbing").nameAr})"
+                    else
+                        "مرحباً $cleanName! تم تسجيل الدخول كزبون بنجاح"
+                )
+            } else {
+                showMessage("تم قفل نوع الحساب مسبقاً ولا يمكن تغييره")
+            }
+        }
+    }
+
+    fun completeGoogleSignIn(
+        uid: String,
+        displayName: String,
+        email: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?
+    ) {
+        viewModelScope.launch {
+            val result = repository.completeGoogleAccountLogin(
+                uid = uid,
+                displayName = displayName,
+                email = email,
+                city = city,
+                preferredRole = preferredRole,
+                preferredSpecialtyId = preferredSpecialtyId
+            )
+            result.onSuccess { session ->
+                val coord = MoroccanLocations.coordForCity(session.city)
+                selectNeighborhood(session.city, coord.lat, coord.lng)
+                showMessage(
+                    if (session.role == UserRole.CRAFTSMAN)
+                        "أهلاً ${session.fullName}! تم تسجيل الدخول بحساب غوغل (حرفي: ${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
+                    else
+                        "أهلاً ${session.fullName}! تم تسجيل الدخول بحساب غوغل (زبون)"
+                )
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إكمال تسجيل الدخول بحساب غوغل")
+            }
         }
     }
 
@@ -981,6 +1074,49 @@ class HirafiViewModel(
         }
     }
 
+    fun submitCraftsmanVerification(
+        nationalIdNumber: String,
+        frontPhotoUri: String?,
+        backPhotoUri: String?,
+        selfiePhotoUri: String?
+    ) {
+        val current = userSession.value
+        if (!AccountRolePolicy.canAccessIdentityVerification(current)) {
+            showMessage("التحقق من الهوية مخصص لحسابات الحرفيين فقط")
+            return
+        }
+        val normalizedCin = IdentityVerificationValidator.normalizeCin(nationalIdNumber)
+        if (!IdentityVerificationValidator.isValidCin(normalizedCin)) {
+            showMessage("يرجى إدخال رقم البطاقة الوطنية بشكل صحيح (مثال: BK123456)")
+            return
+        }
+        if (frontPhotoUri.isNullOrBlank() || backPhotoUri.isNullOrBlank() || selfiePhotoUri.isNullOrBlank()) {
+            showMessage("يرجى إرفاق الوجه الأمامي والخلفي للبطاقة وصورة السيلفي")
+            return
+        }
+        viewModelScope.launch {
+            val ok = repository.submitCraftsmanIdentityVerification(
+                nationalIdNumber = normalizedCin,
+                frontPhotoUri = frontPhotoUri,
+                backPhotoUri = backPhotoUri,
+                selfiePhotoUri = selfiePhotoUri
+            )
+            if (ok) {
+                showMessage("تم استلام ملف التحقق من الهوية وجارٍ التوثيق الفوري...")
+            } else {
+                showMessage("تعذر إرسال ملف التحقق")
+            }
+        }
+    }
+
+    fun resetCraftsmanVerificationForUpdate() {
+        val current = userSession.value
+        if (!AccountRolePolicy.canAccessIdentityVerification(current)) return
+        viewModelScope.launch {
+            repository.resetCraftsmanIdentityVerification()
+        }
+    }
+
     fun signInSupabase(email: String, password: String) {
         viewModelScope.launch {
             _authUiState.value = AuthUiState(isLoading = true)
@@ -1007,6 +1143,30 @@ class HirafiViewModel(
         viewModelScope.launch {
             repository.signOutSupabase()
             _authUiState.value = AuthUiState(message = "تم تسجيل الخروج من حساب Supabase")
+        }
+    }
+
+    fun logoutAccount() {
+        trackingJob?.cancel()
+        gpsStreamJob?.cancel()
+        activeTrackedRequestKey = null
+        locationService?.stopForegroundJobTracking()
+        _activeClientRequestId.value = null
+        _activeChatRequestId.value = null
+        _pendingReviewRequest.value = null
+        _liveRoute.value = LiveRouteState()
+        _trackingState.update {
+            it.copy(
+                isTracking = false,
+                isForegroundServiceActive = false,
+                trackedRequestId = null,
+                errorMessage = null
+            )
+        }
+        viewModelScope.launch {
+            repository.logoutAccount()
+            _authUiState.value = AuthUiState()
+            showMessage("تم تسجيل الخروج من الحساب بنجاح")
         }
     }
 

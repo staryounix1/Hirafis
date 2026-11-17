@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Plumbing
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import java.security.MessageDigest
 
 enum class UserRole(val dbValue: String, val labelAr: String) {
     CLIENT("client", "زبون"),
@@ -179,20 +180,109 @@ data class ReviewRecord(
     val createdAtMillis: Long
 )
 
+enum class IdentityVerificationStatus(val dbValue: String, val labelAr: String) {
+    NOT_SUBMITTED("not_submitted", "غير موثّق بعد"),
+    PENDING_REVIEW("pending_review", "قيد المراجعة السريعة"),
+    VERIFIED("verified", "هوية موثّقة");
+
+    companion object {
+        fun fromDb(value: String?): IdentityVerificationStatus =
+            entries.firstOrNull { it.dbValue == value } ?: NOT_SUBMITTED
+    }
+}
+
+object IdentityVerificationValidator {
+    private val moroccanCinRegex = Regex("^[A-Za-z]{1,2}[0-9]{4,7}$")
+
+    fun normalizeCin(input: String): String =
+        input.trim().uppercase().replace(" ", "").replace("-", "")
+
+    fun isValidCin(input: String): Boolean {
+        val normalized = normalizeCin(input)
+        return normalized.length in 5..10 && (moroccanCinRegex.matches(normalized) || normalized.length >= 6)
+    }
+
+    fun maskCin(input: String): String {
+        val normalized = normalizeCin(input)
+        if (normalized.length <= 4) return normalized
+        return normalized.take(2) + "••••" + normalized.takeLast(2)
+    }
+
+    fun completionStepsCount(
+        cin: String,
+        frontUri: String?,
+        backUri: String?,
+        selfieUri: String?
+    ): Int {
+        var count = 0
+        if (isValidCin(cin)) count++
+        if (!frontUri.isNullOrBlank()) count++
+        if (!backUri.isNullOrBlank()) count++
+        if (!selfieUri.isNullOrBlank()) count++
+        return count
+    }
+}
+
+object LoginValidator {
+    private val emailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+
+    fun normalizeEmail(input: String): String = input.trim().lowercase()
+
+    fun isValidEmail(input: String): Boolean = emailRegex.matches(normalizeEmail(input))
+
+    fun isValidFullName(input: String): Boolean = input.trim().length >= 2
+
+    fun isValidPassword(input: String): Boolean = input.length >= 6
+
+    fun hashPassword(email: String, password: String): String {
+        val raw = "${normalizeEmail(email)}::$password"
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+}
+
 data class UserSession(
     val userId: String = "local_user",
     val fullName: String = "يونس العلمي",
+    val email: String = "",
     val phone: String = "+212 612-345678",
     val city: String = "الدار البيضاء",
     val role: UserRole = UserRole.CLIENT,
+    val isRoleLocked: Boolean = false,
     val craftsmanSpecialtyId: String = "plumbing",
     val isCraftsmanSpecialtyLocked: Boolean = false,
     val isCraftsmanOnline: Boolean = true,
+    val authProvider: String = "email",
+    val verificationStatus: IdentityVerificationStatus = IdentityVerificationStatus.NOT_SUBMITTED,
+    val nationalIdNumber: String = "",
+    val idFrontPhotoUri: String? = null,
+    val idBackPhotoUri: String? = null,
+    val selfiePhotoUri: String? = null,
+    val verificationSubmittedAtMillis: Long? = null,
     val supabaseEmail: String? = null,
     val supabaseAccessToken: String? = null
 ) {
     val isSupabaseAuthenticated: Boolean
         get() = !supabaseAccessToken.isNullOrBlank()
+
+    val isCraftsmanVerified: Boolean
+        get() = role == UserRole.CRAFTSMAN && verificationStatus == IdentityVerificationStatus.VERIFIED
+}
+
+object AccountRolePolicy {
+    fun canSwitchRole(session: UserSession, targetRole: UserRole): Boolean {
+        if (!session.isRoleLocked) return true
+        return session.role == targetRole
+    }
+
+    fun canAccessMode(session: UserSession, mode: UserRole): Boolean {
+        if (!session.isRoleLocked) return false
+        return session.role == mode
+    }
+
+    fun canAccessIdentityVerification(session: UserSession): Boolean {
+        return session.isRoleLocked && session.role == UserRole.CRAFTSMAN
+    }
 }
 
 data class CityCoord(

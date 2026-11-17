@@ -10,6 +10,7 @@ import com.example.data.local.UserPreferencesDataStore
 import com.example.data.model.ChatMessage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.HirafiCategories
+import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.OfferStatus
 import com.example.data.model.PaymentMethod
 import com.example.data.model.RequestStatus
@@ -18,6 +19,7 @@ import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseAuthRequest
 import com.example.data.remote.SupabaseChatMessageDto
@@ -43,7 +45,8 @@ import kotlin.math.roundToInt
 
 class HirafiRepository(
     private val dao: HirafiDao,
-    private val prefs: UserPreferencesDataStore
+    private val prefs: UserPreferencesDataStore,
+    private val firestoreUserRepo: FirestoreUserProfileRepository? = null
 ) {
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -157,7 +160,81 @@ class HirafiRepository(
         dao.upsertRequests(samples)
     }
 
-    suspend fun setRole(role: UserRole) = prefs.setRole(role)
+    suspend fun setRole(role: UserRole): Boolean = prefs.setRole(role)
+
+    suspend fun registerFirstTimeAccount(
+        fullName: String,
+        email: String = "",
+        phone: String = "+212 612-345678",
+        city: String,
+        role: UserRole,
+        specialtyId: String?,
+        passwordHash: String? = null,
+        authProvider: String = "email",
+        userIdOverride: String? = null
+    ): Boolean {
+        val registered = prefs.registerFirstTimeAccount(
+            fullName = fullName,
+            email = email,
+            phone = phone,
+            city = city,
+            role = role,
+            specialtyId = specialtyId,
+            passwordHash = passwordHash,
+            authProvider = authProvider,
+            userIdOverride = userIdOverride
+        )
+        if (registered) {
+            val session = prefs.userSessionFlow.first()
+            pushProfileToSupabase(session)
+        }
+        return registered
+    }
+
+    suspend fun completeGoogleAccountLogin(
+        uid: String,
+        displayName: String,
+        email: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?
+    ): Result<UserSession> {
+        val resolvedName = displayName.trim().ifBlank { email.substringBefore("@").ifBlank { "مستخدم غوغل" } }
+        val resolvedSpec = preferredSpecialtyId ?: "plumbing"
+
+        val synced = firestoreUserRepo?.syncOrRestoreProfile(
+            fullName = resolvedName,
+            email = email,
+            city = city,
+            chosenRole = preferredRole.dbValue,
+            chosenSpecialtyId = resolvedSpec
+        )?.getOrNull()
+
+        val finalRole = if (synced?.role == UserRole.CRAFTSMAN.dbValue) UserRole.CRAFTSMAN
+        else if (synced?.role == UserRole.CLIENT.dbValue) UserRole.CLIENT
+        else preferredRole
+
+        val finalSpecialty = if (finalRole == UserRole.CRAFTSMAN) {
+            synced?.specialtyId?.takeIf { it.isNotBlank() } ?: resolvedSpec
+        } else null
+
+        val finalName = synced?.fullName?.takeIf { it.isNotBlank() } ?: resolvedName
+        val finalEmail = synced?.email?.takeIf { it.isNotBlank() } ?: email
+        val finalCity = synced?.city?.takeIf { it.isNotBlank() } ?: city
+
+        prefs.registerFirstTimeAccount(
+            fullName = finalName,
+            email = finalEmail,
+            phone = "+212 612-345678",
+            city = finalCity,
+            role = finalRole,
+            specialtyId = finalSpecialty,
+            authProvider = "google",
+            userIdOverride = uid
+        )
+        return Result.success(prefs.userSessionFlow.first())
+    }
+
     suspend fun setCraftsmanOnline(isOnline: Boolean) = prefs.setCraftsmanOnline(isOnline)
     suspend fun setCity(city: String) = prefs.setCity(city)
     suspend fun setSpecialty(specialtyId: String): Boolean {
@@ -172,6 +249,39 @@ class HirafiRepository(
         prefs.updateProfile(fullName, phone, city)
         val session = prefs.userSessionFlow.first()
         pushProfileToSupabase(session)
+    }
+
+    suspend fun submitCraftsmanIdentityVerification(
+        nationalIdNumber: String,
+        frontPhotoUri: String,
+        backPhotoUri: String,
+        selfiePhotoUri: String
+    ): Boolean {
+        val session = prefs.userSessionFlow.first()
+        if (session.role != UserRole.CRAFTSMAN) return false
+        prefs.saveIdentityVerificationSubmission(
+            nationalIdNumber = nationalIdNumber,
+            frontPhotoUri = frontPhotoUri,
+            backPhotoUri = backPhotoUri,
+            selfiePhotoUri = selfiePhotoUri,
+            status = IdentityVerificationStatus.PENDING_REVIEW
+        )
+        repoScope.launch {
+            delay(2600L)
+            val latest = prefs.userSessionFlow.first()
+            if (latest.role == UserRole.CRAFTSMAN &&
+                latest.verificationStatus == IdentityVerificationStatus.PENDING_REVIEW
+            ) {
+                prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.VERIFIED)
+            }
+        }
+        return true
+    }
+
+    suspend fun resetCraftsmanIdentityVerification() {
+        val session = prefs.userSessionFlow.first()
+        if (session.role != UserRole.CRAFTSMAN) return
+        prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.NOT_SUBMITTED)
     }
 
     suspend fun createServiceRequest(
@@ -709,6 +819,10 @@ class HirafiRepository(
 
     suspend fun signOutSupabase() {
         prefs.clearSupabaseAuth()
+    }
+
+    suspend fun logoutAccount() {
+        prefs.logoutAccount()
     }
 
     suspend fun syncFromSupabase(): Result<Int> {

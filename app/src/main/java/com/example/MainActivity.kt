@@ -51,17 +51,22 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.credentials.CredentialManager
 import com.example.data.local.HirafiDatabase
 import com.example.data.local.UserPreferencesDataStore
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.UserRole
+import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.repository.HirafiRepository
+import com.example.ui.auth.GoogleAuthHelper
 import com.example.ui.components.HirafiDrawerContent
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.ClientHomeScreen
 import com.example.ui.screens.CraftsmanDashboardScreen
+import com.example.ui.screens.CraftsmanVerificationScreen
 import com.example.ui.screens.OrdersHistoryScreen
+import com.example.ui.screens.RoleRegistrationScreen
 import com.example.ui.screens.SafetyScreen
 import com.example.ui.theme.HirafiTheme
 import com.example.ui.theme.VerifiedEmerald
@@ -85,7 +90,8 @@ class MainActivity : ComponentActivity() {
 
         val db = HirafiDatabase.getInstance(applicationContext)
         val prefs = UserPreferencesDataStore(applicationContext)
-        val repository = HirafiRepository(db.hirafiDao(), prefs)
+        val firestoreUserRepo = FirestoreUserProfileRepository(applicationContext)
+        val repository = HirafiRepository(db.hirafiDao(), prefs, firestoreUserRepo)
 
         setContent {
             HirafiTheme {
@@ -132,7 +138,7 @@ fun HirafiAppRoot(repository: HirafiRepository) {
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = drawerState.isOpen,
+        gesturesEnabled = session.isRoleLocked && drawerState.isOpen,
         drawerContent = {
             HirafiDrawerContent(
                 session = session,
@@ -145,18 +151,19 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                         restoreState = true
                     }
                 },
-                onSwitchRole = { targetRole ->
-                    scope.launch { drawerState.close() }
-                    viewModel.switchRole(targetRole)
-                    if (currentRoute != "home") {
-                        navController.navigate("home") {
-                            popUpTo("home") { inclusive = true }
-                        }
-                    }
-                },
                 onCityClick = {
                     scope.launch { drawerState.close() }
                     showCityDialog = true
+                },
+                onLogout = {
+                    scope.launch { drawerState.close() }
+                    if (currentRoute != "home") {
+                        navController.popBackStack("home", inclusive = false)
+                    }
+                    val credManager = CredentialManager.create(context)
+                    GoogleAuthHelper.signOut(credManager, scope) {
+                        viewModel.logoutAccount()
+                    }
                 }
             )
         }
@@ -165,29 +172,55 @@ fun HirafiAppRoot(repository: HirafiRepository) {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             modifier = Modifier.fillMaxSize()
         ) { _ ->
-            NavHost(
-                navController = navController,
-                startDestination = "home",
-                modifier = Modifier.fillMaxSize()
-            ) {
-                composable("home") {
-                    if (session.role == UserRole.CLIENT) {
-                        ClientHomeScreen(
-                            viewModel = viewModel,
-                            biddingViewModel = biddingViewModel,
-                            onOpenDrawer = { scope.launch { drawerState.open() } },
-                            onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
-                            onOpenSafety = { navController.navigate("safety") }
+            if (!session.isRoleLocked) {
+                RoleRegistrationScreen(
+                    initialSession = session,
+                    onRegisterWithEmail = { fullName, email, password, city, role, specialtyId ->
+                        viewModel.registerFirstTimeAccount(
+                            fullName = fullName,
+                            email = email,
+                            password = password,
+                            city = city,
+                            role = role,
+                            specialtyId = specialtyId
                         )
-                    } else {
-                        CraftsmanDashboardScreen(
-                            viewModel = viewModel,
-                            biddingViewModel = biddingViewModel,
-                            onOpenDrawer = { scope.launch { drawerState.open() } },
-                            onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                    },
+                    onGoogleAuthSuccess = { account, city, role, specialtyId ->
+                        viewModel.completeGoogleSignIn(
+                            uid = account.uid,
+                            displayName = account.displayName,
+                            email = account.email,
+                            city = city,
+                            preferredRole = role,
+                            preferredSpecialtyId = specialtyId
                         )
+                    },
+                    onShowError = { message -> viewModel.showMessage(message) }
+                )
+            } else {
+                NavHost(
+                    navController = navController,
+                    startDestination = "home",
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    composable("home") {
+                        if (session.role == UserRole.CLIENT) {
+                            ClientHomeScreen(
+                                viewModel = viewModel,
+                                biddingViewModel = biddingViewModel,
+                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                                onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
+                                onOpenSafety = { navController.navigate("safety") }
+                            )
+                        } else {
+                            CraftsmanDashboardScreen(
+                                viewModel = viewModel,
+                                biddingViewModel = biddingViewModel,
+                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                                onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                            )
+                        }
                     }
-                }
 
                 composable("orders") {
                     OrdersHistoryScreen(
@@ -201,16 +234,24 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                     SafetyScreen(onBack = { navController.popBackStack() })
                 }
 
-                composable(
-                    route = "chat/{requestId}",
-                    arguments = listOf(navArgument("requestId") { type = NavType.StringType })
-                ) { entry ->
-                    val requestId = entry.arguments?.getString("requestId") ?: return@composable
-                    ChatScreen(
-                        requestId = requestId,
+                composable("verification") {
+                    CraftsmanVerificationScreen(
                         viewModel = viewModel,
                         onBack = { navController.popBackStack() }
                     )
+                }
+
+                    composable(
+                        route = "chat/{requestId}",
+                        arguments = listOf(navArgument("requestId") { type = NavType.StringType })
+                    ) { entry ->
+                        val requestId = entry.arguments?.getString("requestId") ?: return@composable
+                        ChatScreen(
+                            requestId = requestId,
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
                 }
             }
         }

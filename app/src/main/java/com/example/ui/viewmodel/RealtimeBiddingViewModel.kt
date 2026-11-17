@@ -3,6 +3,10 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.BiddingSessionSummary
+import com.example.data.model.CounterOfferSubmission
+import com.example.data.model.CraftsmanBidDraft as DomainCraftsmanBidDraft
+import com.example.data.model.JobPriceProposal
 import com.example.data.model.OfferSortOption
 import com.example.data.model.OfferStatus
 import com.example.data.model.RequestStatus
@@ -27,19 +31,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-data class CraftsmanBidDraft(
-    val requestId: String? = null,
-    val offeredPrice: Int = 120,
-    val etaMinutes: Int = 10,
-    val note: String = "",
-    val isSubmitting: Boolean = false
-)
+typealias CraftsmanBidDraft = DomainCraftsmanBidDraft
 
 sealed interface BiddingUiState {
     data object Idle : BiddingUiState
     data class Loading(val requestId: String) : BiddingUiState
     data class Active(
         val request: ServiceRequest,
+        val priceProposal: JobPriceProposal,
+        val summary: BiddingSessionSummary,
         val offers: List<ServiceOffer>,
         val mySubmittedOffer: ServiceOffer?,
         val session: UserSession,
@@ -143,8 +143,16 @@ class RealtimeBiddingViewModel(
                             it.status == OfferStatus.COUNTERED ||
                             it.status == OfferStatus.ACCEPTED)
                 }
+                val priceProposal = JobPriceProposal.fromRequest(request)
+                val summary = BiddingSessionSummary.fromOffers(
+                    role = aux.session.role,
+                    offers = activeOffers,
+                    clientProposedPriceDh = request.proposedPrice
+                )
                 BiddingUiState.Active(
                     request = request,
+                    priceProposal = priceProposal,
+                    summary = summary,
                     offers = activeOffers,
                     mySubmittedOffer = myOffer,
                     session = aux.session,
@@ -304,9 +312,45 @@ class RealtimeBiddingViewModel(
         }
     }
 
+    fun acceptCounterOfferAsCraftsman(offer: ServiceOffer) {
+        viewModelScope.launch {
+            _bidDraft.update { it.copy(isSubmitting = true) }
+            runCatching {
+                repository.acceptOffer(offer)
+            }.onSuccess {
+                _bidDraft.update { it.copy(isSubmitting = false) }
+                _statusEvent.value = "تمت الموافقة على السعر المضاد (${offer.offeredPrice} د.م)!"
+            }.onFailure { err ->
+                _bidDraft.update { it.copy(isSubmitting = false) }
+                _statusEvent.value = err.message ?: "تعذر قبول العرض المضاد"
+            }
+        }
+    }
+
+    fun submitCounterOffer(submission: CounterOfferSubmission) {
+        val activeState = uiState.value as? BiddingUiState.Active ?: return
+        val safePrice = activeState.priceProposal.clampedPrice(submission.proposedPriceDh)
+        if (submission.fromRole == UserRole.CRAFTSMAN) {
+            submitQuickCraftsmanBid(
+                offeredPrice = safePrice,
+                etaMinutes = submission.etaMinutes,
+                note = submission.note
+            )
+        } else {
+            val targetOffer = activeState.offers.firstOrNull { it.id == submission.targetOfferId } ?: return
+            counterOffer(targetOffer, safePrice)
+        }
+    }
+
     fun adjustClientProposedPrice(delta: Int) {
         val activeState = uiState.value as? BiddingUiState.Active ?: return
         val newPrice = (activeState.request.proposedPrice + delta).coerceIn(50, 5000)
+        setClientProposedPrice(newPrice)
+    }
+
+    fun setClientProposedPrice(price: Int) {
+        val activeState = uiState.value as? BiddingUiState.Active ?: return
+        val newPrice = activeState.priceProposal.clampedPrice(price).coerceAtLeast(50)
         viewModelScope.launch {
             repository.raiseRequestPrice(activeState.request.id, newPrice)
             _statusEvent.value = "تم تحديث السعر المقترح إلى $newPrice د.م"

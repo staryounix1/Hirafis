@@ -1,7 +1,18 @@
 package com.example
 
 import com.example.data.location.RealTimeLocationService
+import com.example.data.model.AcceptanceRadarMetrics
+import com.example.data.model.AccountRolePolicy
+import com.example.data.model.BiddingSessionSummary
+import com.example.data.model.CounterOfferSubmission
+import com.example.data.model.FairPriceAssessment
 import com.example.data.model.HirafiCategories
+import com.example.data.model.HirafiQuickScenarios
+import com.example.data.model.IdentityVerificationStatus
+import com.example.data.model.IdentityVerificationValidator
+import com.example.data.model.JobHandshakeSecurity
+import com.example.data.model.JobPriceProposal
+import com.example.data.model.LoginValidator
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.OfferSortOption
 import com.example.data.model.OfferStatus
@@ -9,11 +20,14 @@ import com.example.data.model.PaymentMethod
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
+import com.example.data.model.UserRole
+import com.example.data.model.UserSession
 import com.example.data.remote.MapRoutingService
 import com.example.data.repository.HirafiRepository
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -151,5 +165,199 @@ class ExampleUnitTest {
     assertEquals(10, RealTimeLocationService.computeEtaMinutes(6.0, 10.0f))
     // Stationary (0 m/s) uses 24 km/h urban baseline -> 4.0 km takes 10 minutes
     assertEquals(10, RealTimeLocationService.computeEtaMinutes(4.0, 0.0f))
+  }
+
+  @Test
+  fun `job price proposal evaluates market fairness and clamps counter offers`() {
+    val low = JobPriceProposal(
+      categoryId = "plumbing",
+      proposedPriceDh = 70,
+      recommendedMinDh = 100,
+      recommendedMaxDh = 180
+    )
+    assertEquals(FairPriceAssessment.LOW, low.assessFairness())
+    assertEquals(40, low.clampedPrice(10))
+    assertEquals(5000, low.clampedPrice(9999))
+
+    val fair = low.copy(proposedPriceDh = 140)
+    assertEquals(FairPriceAssessment.FAIR, fair.assessFairness())
+
+    val generous = low.copy(proposedPriceDh = 220)
+    assertEquals(FairPriceAssessment.GENEROUS, generous.assessFairness())
+
+    val counter = CounterOfferSubmission(
+      requestId = "req_1",
+      targetOfferId = "off_1",
+      fromRole = UserRole.CRAFTSMAN,
+      proposedPriceDh = 160,
+      etaMinutes = 12,
+      note = "شامل القطع"
+    )
+    assertEquals(160, counter.proposedPriceDh)
+    assertEquals(UserRole.CRAFTSMAN, counter.fromRole)
+  }
+
+  @Test
+  fun `bidding session summary exposes metrics to client and hides competitor bids from craftsman`() {
+    val now = 200_000L
+    val offers = listOf(
+      ServiceOffer("o1", "r1", "c1", "كريم", "0600", 4.7, 50, "سباكة", 140, 8, 1.2, "", OfferStatus.PENDING, now - 1000, now + 30_000),
+      ServiceOffer("o2", "r1", "c2", "عمر", "0601", 4.95, 120, "سباكة", 110, 15, 2.5, "", OfferStatus.PENDING, now - 1000, now + 30_000)
+    )
+
+    val clientSummary = BiddingSessionSummary.fromOffers(UserRole.CLIENT, offers, 120)
+    assertEquals(2, clientSummary.activeOfferCount)
+    assertEquals(110, clientSummary.lowestPriceDh)
+    assertEquals(8, clientSummary.fastestEtaMinutes)
+    assertEquals(4.95, clientSummary.highestRating!!, 0.001)
+
+    val craftsmanSummary = BiddingSessionSummary.fromOffers(UserRole.CRAFTSMAN, offers, 120)
+    assertEquals(0, craftsmanSummary.activeOfferCount)
+    assertNull(craftsmanSummary.lowestPriceDh)
+    assertNull(craftsmanSummary.fastestEtaMinutes)
+    assertNull(craftsmanSummary.highestRating)
+  }
+
+  @Test
+  fun `quick triage scenarios cover all categories and handshake security generates valid 4-digit pin and warranty`() {
+    HirafiCategories.all.forEach { category ->
+      val presets = HirafiQuickScenarios.forCategory(category.id)
+      assertTrue("Expected presets for ${category.id}", presets.isNotEmpty())
+      presets.forEach { preset ->
+        assertTrue(preset.recommendedPriceDh >= 40)
+        assertTrue(preset.estimatedMinutes > 0)
+      }
+    }
+
+    val req = ServiceRequest(
+      id = "req_security_test_1",
+      clientId = "client_42",
+      clientName = "أنس",
+      categoryId = "plumbing",
+      categoryName = "سباكة",
+      title = "تسرب تحت الحوض",
+      description = "",
+      addressLabel = "المعاريف، الدار البيضاء",
+      lat = 33.5822,
+      lng = -7.6324,
+      mapX = 0.5f,
+      mapY = 0.5f,
+      proposedPrice = 150,
+      acceptedPrice = 150,
+      paymentMethod = PaymentMethod.CASH,
+      isUrgent = true,
+      status = RequestStatus.COMPLETED,
+      assignedCraftsmanId = "craft_7",
+      assignedCraftsmanName = "كمال السباك",
+      assignedCraftsmanPhone = "+212600112233",
+      assignedCraftsmanRating = 4.9,
+      photoUri = null,
+      createdAtMillis = 1_700_000_000_000L,
+      updatedAtMillis = 1_700_003_600_000L
+    )
+
+    val pin = JobHandshakeSecurity.deriveSecurityPin(req)
+    assertEquals(4, pin.length)
+    assertTrue(pin.all { it.isDigit() })
+    assertEquals(pin, JobHandshakeSecurity.deriveSecurityPin(req))
+
+    val warranty = JobHandshakeSecurity.deriveWarrantyCode(req)
+    assertTrue(warranty.startsWith("HRF-") && warranty.endsWith("-30D"))
+
+    val shareText = JobHandshakeSecurity.buildWarrantyShareText(req)
+    assertTrue(shareText.contains(warranty))
+    assertTrue(shareText.contains("كمال السباك"))
+
+    val radarHigh = AcceptanceRadarMetrics.compute(
+      JobPriceProposal(categoryId = "plumbing", proposedPriceDh = 210, recommendedMinDh = 100, recommendedMaxDh = 180, isUrgent = true)
+    )
+    val radarLow = AcceptanceRadarMetrics.compute(
+      JobPriceProposal(categoryId = "plumbing", proposedPriceDh = 60, recommendedMinDh = 100, recommendedMaxDh = 180, isUrgent = false)
+    )
+    assertTrue(radarHigh.probabilityPercent > radarLow.probabilityPercent)
+  }
+
+  @Test
+  fun `permanent role lock blocks client from craftsman mode and craftsman from client mode`() {
+    val unregistered = UserSession(role = UserRole.CLIENT, isRoleLocked = false)
+    assertFalse(AccountRolePolicy.canAccessMode(unregistered, UserRole.CLIENT))
+    assertFalse(AccountRolePolicy.canAccessMode(unregistered, UserRole.CRAFTSMAN))
+    assertTrue(AccountRolePolicy.canSwitchRole(unregistered, UserRole.CRAFTSMAN))
+
+    val lockedClient = UserSession(role = UserRole.CLIENT, isRoleLocked = true)
+    assertTrue(AccountRolePolicy.canAccessMode(lockedClient, UserRole.CLIENT))
+    assertFalse(AccountRolePolicy.canAccessMode(lockedClient, UserRole.CRAFTSMAN))
+    assertFalse(AccountRolePolicy.canSwitchRole(lockedClient, UserRole.CRAFTSMAN))
+    assertTrue(AccountRolePolicy.canSwitchRole(lockedClient, UserRole.CLIENT))
+
+    val lockedCraftsman = UserSession(
+      role = UserRole.CRAFTSMAN,
+      isRoleLocked = true,
+      craftsmanSpecialtyId = "electricity",
+      isCraftsmanSpecialtyLocked = true
+    )
+    assertTrue(AccountRolePolicy.canAccessMode(lockedCraftsman, UserRole.CRAFTSMAN))
+    assertFalse(AccountRolePolicy.canAccessMode(lockedCraftsman, UserRole.CLIENT))
+    assertFalse(AccountRolePolicy.canSwitchRole(lockedCraftsman, UserRole.CLIENT))
+    assertTrue(AccountRolePolicy.canSwitchRole(lockedCraftsman, UserRole.CRAFTSMAN))
+  }
+
+  @Test
+  fun `identity verification is restricted to craftsmen and validates moroccan CIN steps`() {
+    val client = UserSession(role = UserRole.CLIENT, isRoleLocked = true)
+    val unregisteredCraftsman = UserSession(role = UserRole.CRAFTSMAN, isRoleLocked = false)
+    val craftsman = UserSession(
+      role = UserRole.CRAFTSMAN,
+      isRoleLocked = true,
+      craftsmanSpecialtyId = "plumbing",
+      isCraftsmanSpecialtyLocked = true,
+      verificationStatus = IdentityVerificationStatus.VERIFIED
+    )
+
+    assertFalse(AccountRolePolicy.canAccessIdentityVerification(client))
+    assertFalse(AccountRolePolicy.canAccessIdentityVerification(unregisteredCraftsman))
+    assertTrue(AccountRolePolicy.canAccessIdentityVerification(craftsman))
+    assertTrue(craftsman.isCraftsmanVerified)
+    assertFalse(client.isCraftsmanVerified)
+
+    assertTrue(IdentityVerificationValidator.isValidCin("bk 654321"))
+    assertFalse(IdentityVerificationValidator.isValidCin("12"))
+    assertEquals("BK••••21", IdentityVerificationValidator.maskCin("bk654321"))
+    assertEquals(
+      4,
+      IdentityVerificationValidator.completionStepsCount(
+        cin = "BK654321",
+        frontUri = "content://front",
+        backUri = "content://back",
+        selfieUri = "content://selfie"
+      )
+    )
+    assertEquals(
+      2,
+      IdentityVerificationValidator.completionStepsCount(
+        cin = "BK654321",
+        frontUri = "content://front",
+        backUri = null,
+        selfieUri = null
+      )
+    )
+  }
+
+  @Test
+  fun `login validator checks full name email password and produces deterministic hash`() {
+    assertTrue(LoginValidator.isValidFullName("يونس العلمي"))
+    assertFalse(LoginValidator.isValidFullName("A"))
+
+    assertTrue(LoginValidator.isValidEmail("Youness.User@gmail.com"))
+    assertEquals("youness.user@gmail.com", LoginValidator.normalizeEmail("  Youness.User@Gmail.com "))
+    assertFalse(LoginValidator.isValidEmail("invalid-email"))
+
+    assertTrue(LoginValidator.isValidPassword("secret123"))
+    assertFalse(LoginValidator.isValidPassword("12345"))
+
+    val h1 = LoginValidator.hashPassword("User@Gmail.com", "secret123")
+    val h2 = LoginValidator.hashPassword("user@gmail.com ", "secret123")
+    assertEquals(64, h1.length)
+    assertEquals(h1, h2)
   }
 }
