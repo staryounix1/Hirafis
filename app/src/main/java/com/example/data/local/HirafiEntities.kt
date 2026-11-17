@@ -71,3 +71,14 @@ data class ReviewEntity(
     val comment: String,
     val createdAtMillis: Long
 )
+
+@Entity(tableName = "portfolio_items")
+data class PortfolioItemEntity(
+    @PrimaryKey val id: String,
+    val craftsmanId: String,
+    val title: String,
+    val description: String,
+    val categoryName: String,
+    val photoUri: String?,
+    val createdAtMillis: Long
+)

@@ -10,9 +10,10 @@ import androidx.room.RoomDatabase
         ServiceRequestEntity::class,
         ServiceOfferEntity::class,
         ChatMessageEntity::class,
-        ReviewEntity::class
+        ReviewEntity::class,
+        PortfolioItemEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class HirafiDatabase : RoomDatabase() {
@@ -28,7 +29,10 @@ abstract class HirafiDatabase : RoomDatabase() {
                     context.applicationContext,
                     HirafiDatabase::class.java,
                     "hirafi_db"
-                ).build().also { INSTANCE = it }
+                )
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

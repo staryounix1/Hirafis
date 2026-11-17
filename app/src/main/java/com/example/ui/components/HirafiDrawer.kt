@@ -2,12 +2,14 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -21,14 +23,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LocationCity
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
+import coil.compose.AsyncImage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,7 +103,7 @@ fun HirafiDrawerContent(
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Authentic inDrive Clean Profile Header
+                // Authentic inDrive Clean Profile Header (Clickable -> Profile Screen)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -105,7 +111,9 @@ fun HirafiDrawerContent(
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                        .clickable { onNavigate("profile") }
                         .padding(14.dp)
+                        .testTag("drawer_profile_header")
                 ) {
                     Box(
                         contentAlignment = Alignment.Center,
@@ -114,12 +122,21 @@ fun HirafiDrawerContent(
                             .clip(CircleShape)
                             .background(ObsidianBlack)
                     ) {
-                        Text(
-                            text = session.fullName.take(1),
-                            color = ElectricLime,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
+                        if (!session.avatarUri.isNullOrBlank()) {
+                            AsyncImage(
+                                model = session.avatarUri,
+                                contentDescription = "الصورة الشخصية",
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text(
+                                text = session.fullName.take(1),
+                                color = ElectricLime,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                        }
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -189,6 +206,14 @@ fun HirafiDrawerContent(
                     icon = Icons.Rounded.Home,
                     selected = currentRoute == "home",
                     onClick = { onNavigate("home") }
+                )
+                DrawerNavItem(
+                    label = "الملف الشخصي",
+                    icon = Icons.Rounded.Person,
+                    selected = currentRoute == "profile",
+                    badgeText = if (session.role == UserRole.CRAFTSMAN) "معرض الأعمال" else null,
+                    onClick = { onNavigate("profile") },
+                    testTag = "drawer_profile_item"
                 )
                 DrawerNavItem(
                     label = "سجل الطلبات والضمانات",

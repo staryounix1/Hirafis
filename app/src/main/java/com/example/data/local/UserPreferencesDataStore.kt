@@ -5,9 +5,11 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.data.model.HirafiCategories
 import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
@@ -31,6 +33,10 @@ class UserPreferencesDataStore(private val context: Context) {
         val IS_ONLINE = booleanPreferencesKey("craftsman_is_online")
         val AUTH_PROVIDER = stringPreferencesKey("auth_provider")
         val PASSWORD_HASH = stringPreferencesKey("password_hash")
+        val AVATAR_URI = stringPreferencesKey("profile_avatar_uri")
+        val BIO = stringPreferencesKey("profile_bio")
+        val EXPERIENCE_YEARS = intPreferencesKey("craftsman_experience_years")
+        val BASE_PRICE_DH = intPreferencesKey("craftsman_base_price_dh")
         val VERIFICATION_STATUS = stringPreferencesKey("craftsman_verification_status")
         val NATIONAL_ID_NUMBER = stringPreferencesKey("craftsman_national_id")
         val ID_FRONT_URI = stringPreferencesKey("craftsman_id_front_uri")
@@ -43,6 +49,7 @@ class UserPreferencesDataStore(private val context: Context) {
 
     val userSessionFlow: Flow<UserSession> = context.dataStore.data.map { prefs ->
         val roleDb = prefs[Keys.ROLE] ?: UserRole.CLIENT.dbValue
+        val specId = prefs[Keys.SPECIALTY_ID] ?: "plumbing"
         UserSession(
             userId = prefs[Keys.USER_ID] ?: "local_user",
             fullName = prefs[Keys.FULL_NAME] ?: "يونس العلمي",
@@ -51,10 +58,14 @@ class UserPreferencesDataStore(private val context: Context) {
             city = prefs[Keys.CITY] ?: "الدار البيضاء",
             role = if (roleDb == UserRole.CRAFTSMAN.dbValue) UserRole.CRAFTSMAN else UserRole.CLIENT,
             isRoleLocked = prefs[Keys.ROLE_LOCKED] ?: false,
-            craftsmanSpecialtyId = prefs[Keys.SPECIALTY_ID] ?: "plumbing",
+            craftsmanSpecialtyId = specId,
             isCraftsmanSpecialtyLocked = prefs[Keys.SPECIALTY_LOCKED] ?: false,
             isCraftsmanOnline = prefs[Keys.IS_ONLINE] ?: true,
             authProvider = prefs[Keys.AUTH_PROVIDER] ?: "email",
+            avatarUri = prefs[Keys.AVATAR_URI],
+            bio = prefs[Keys.BIO] ?: "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
+            experienceYears = prefs[Keys.EXPERIENCE_YEARS] ?: 5,
+            basePriceDh = prefs[Keys.BASE_PRICE_DH] ?: HirafiCategories.byId(specId).defaultPriceDh,
             verificationStatus = IdentityVerificationStatus.fromDb(prefs[Keys.VERIFICATION_STATUS]),
             nationalIdNumber = prefs[Keys.NATIONAL_ID_NUMBER] ?: "",
             idFrontPhotoUri = prefs[Keys.ID_FRONT_URI],
@@ -87,7 +98,11 @@ class UserPreferencesDataStore(private val context: Context) {
         specialtyId: String?,
         passwordHash: String? = null,
         authProvider: String = "email",
-        userIdOverride: String? = null
+        userIdOverride: String? = null,
+        avatarUri: String? = null,
+        bio: String? = null,
+        experienceYears: Int? = null,
+        basePriceDh: Int? = null
     ): Boolean {
         var registered = false
         context.dataStore.edit { prefs ->
@@ -100,6 +115,10 @@ class UserPreferencesDataStore(private val context: Context) {
                 prefs[Keys.ROLE] = role.dbValue
                 prefs[Keys.ROLE_LOCKED] = true
                 prefs[Keys.AUTH_PROVIDER] = authProvider
+                if (!avatarUri.isNullOrBlank()) prefs[Keys.AVATAR_URI] = avatarUri
+                if (!bio.isNullOrBlank()) prefs[Keys.BIO] = bio
+                if (experienceYears != null) prefs[Keys.EXPERIENCE_YEARS] = experienceYears
+                if (basePriceDh != null) prefs[Keys.BASE_PRICE_DH] = basePriceDh
                 if (!passwordHash.isNullOrBlank()) {
                     prefs[Keys.PASSWORD_HASH] = passwordHash
                 }
@@ -114,6 +133,9 @@ class UserPreferencesDataStore(private val context: Context) {
                 if (role == UserRole.CRAFTSMAN && !specialtyId.isNullOrBlank()) {
                     prefs[Keys.SPECIALTY_ID] = specialtyId
                     prefs[Keys.SPECIALTY_LOCKED] = true
+                    if (basePriceDh == null) {
+                        prefs[Keys.BASE_PRICE_DH] = HirafiCategories.byId(specialtyId).defaultPriceDh
+                    }
                 }
                 registered = true
             }
@@ -142,11 +164,26 @@ class UserPreferencesDataStore(private val context: Context) {
         return updated
     }
 
-    suspend fun updateProfile(fullName: String, phone: String, city: String) {
-        context.dataStore.edit {
-            it[Keys.FULL_NAME] = fullName
-            it[Keys.PHONE] = phone
-            it[Keys.CITY] = city
+    suspend fun updateProfile(
+        fullName: String,
+        phone: String,
+        city: String,
+        avatarUri: String? = null,
+        bio: String? = null,
+        experienceYears: Int? = null,
+        basePriceDh: Int? = null
+    ) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.FULL_NAME] = fullName.trim()
+            prefs[Keys.PHONE] = phone.trim()
+            prefs[Keys.CITY] = city
+            if (avatarUri != null) {
+                if (avatarUri.isBlank()) prefs.remove(Keys.AVATAR_URI)
+                else prefs[Keys.AVATAR_URI] = avatarUri
+            }
+            if (bio != null) prefs[Keys.BIO] = bio.trim()
+            if (experienceYears != null) prefs[Keys.EXPERIENCE_YEARS] = experienceYears.coerceIn(0, 60)
+            if (basePriceDh != null) prefs[Keys.BASE_PRICE_DH] = basePriceDh.coerceIn(40, 5000)
         }
     }
 

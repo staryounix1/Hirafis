@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -79,6 +80,7 @@ class RealtimeBiddingViewModel(
     val statusEvent: StateFlow<String?> = _statusEvent.asStateFlow()
 
     private var realtimePollingJob: Job? = null
+    private var firestoreOffersJob: Job? = null
 
     private val tickerMillis: StateFlow<Long> = flow {
         while (true) {
@@ -169,6 +171,7 @@ class RealtimeBiddingViewModel(
         if (_boundRequestId.value != request.id) {
             _boundRequestId.value = request.id
             prepareDraftForRequest(request)
+            startRealtimeFirestoreOffers(request.id)
             startRealtimeOfferPolling(request.id)
         } else if (_bidDraft.value.requestId != request.id) {
             prepareDraftForRequest(request)
@@ -177,6 +180,8 @@ class RealtimeBiddingViewModel(
 
     fun unbindRequest() {
         _boundRequestId.value = null
+        firestoreOffersJob?.cancel()
+        firestoreOffersJob = null
         realtimePollingJob?.cancel()
         realtimePollingJob = null
     }
@@ -370,15 +375,29 @@ class RealtimeBiddingViewModel(
         _statusEvent.value = null
     }
 
+    private fun startRealtimeFirestoreOffers(requestId: String) {
+        firestoreOffersJob?.cancel()
+        if (!repository.isFirestoreAuthenticated) return
+        firestoreOffersJob = viewModelScope.launch {
+            val session = repository.userSession.first()
+            repository.observeFirestoreOffersForRequest(requestId, session.role)
+                .collect { remoteOffers ->
+                    repository.cacheRemoteOffers(remoteOffers)
+                }
+        }
+    }
+
     private fun startRealtimeOfferPolling(requestId: String) {
         realtimePollingJob?.cancel()
         realtimePollingJob = viewModelScope.launch {
             while (isActive && _boundRequestId.value == requestId) {
                 val currentReq = boundRequest.value
                 if (currentReq == null || currentReq.status == RequestStatus.SEARCHING) {
-                    _isSyncingRealtime.value = true
-                    repository.syncOffersForRequestFromSupabase(requestId)
-                    _isSyncingRealtime.value = false
+                    if (!repository.isFirestoreAuthenticated) {
+                        _isSyncingRealtime.value = true
+                        repository.syncOffersForRequestFromSupabase(requestId)
+                        _isSyncingRealtime.value = false
+                    }
                 }
                 delay(3500L)
             }
@@ -386,6 +405,7 @@ class RealtimeBiddingViewModel(
     }
 
     override fun onCleared() {
+        firestoreOffersJob?.cancel()
         realtimePollingJob?.cancel()
         super.onCleared()
     }

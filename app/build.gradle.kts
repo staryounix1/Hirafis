@@ -76,6 +76,7 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("MAPBOX_DOWNLOADS_TOKEN")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
@@ -118,9 +119,11 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
+  implementation(libs.mapbox.android)
+  implementation(libs.mapbox.compose)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
-  implementation(libs.osmdroid.android)
+  // implementation(libs.osmdroid.android)
   implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

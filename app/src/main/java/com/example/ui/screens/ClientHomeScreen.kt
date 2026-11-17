@@ -147,6 +147,7 @@ fun ClientHomeScreen(
     val pendingReview by viewModel.pendingReviewRequest.collectAsStateWithLifecycle()
     val placeResults by viewModel.placeSearchResults.collectAsStateWithLifecycle()
     val isSearchingPlaces by viewModel.isSearchingPlaces.collectAsStateWithLifecycle()
+    val previewedPortfolio by viewModel.previewedCraftsmanPortfolio.collectAsStateWithLifecycle()
 
     var showLocationPicker by remember { mutableStateOf(false) }
     var showCraftsmenSheet by remember { mutableStateOf(false) }
@@ -1059,8 +1060,12 @@ fun ClientHomeScreen(
     }
 
     selectedPinPreview?.let { pin ->
+        LaunchedEffect(pin.id) {
+            viewModel.loadCraftsmanPortfolio(pin.id)
+        }
         CraftsmanDetailDialog(
             pin = pin,
+            portfolioItems = previewedPortfolio,
             onDirectRequest = { target ->
                 selectedPinPreview = null
                 viewModel.requestSpecificCraftsman(target)

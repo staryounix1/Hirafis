@@ -61,14 +61,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.rounded.Workspaces
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.HirafiCategories
+import com.example.data.model.PortfolioItem
 import com.example.ui.theme.ElectricLime
 import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.VerifiedEmeraldSoft
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -357,12 +365,21 @@ private fun CraftsmanDiscoveryCard(
                             .clip(CircleShape)
                             .background(ObsidianBlack)
                     ) {
-                        Text(
-                            text = pin.name.take(1),
-                            color = ElectricLime,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
+                        if (!pin.avatarUri.isNullOrBlank()) {
+                            AsyncImage(
+                                model = pin.avatarUri,
+                                contentDescription = pin.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text(
+                                text = pin.name.take(1),
+                                color = ElectricLime,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        }
                     }
                     Spacer(Modifier.width(10.dp))
                     Column {
@@ -384,6 +401,20 @@ private fun CraftsmanDiscoveryCard(
                                     tint = VerifiedEmerald,
                                     modifier = Modifier.size(16.dp)
                                 )
+                            }
+                            if (pin.isLiveCloud) {
+                                Surface(
+                                    color = VerifiedEmeraldSoft,
+                                    shape = RoundedCornerShape(99.dp)
+                                ) {
+                                    Text(
+                                        text = "مباشر",
+                                        color = VerifiedEmerald,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                    )
+                                }
                             }
                         }
                         Row(
@@ -483,6 +514,7 @@ private fun CraftsmanDiscoveryCard(
 @Composable
 fun CraftsmanDetailDialog(
     pin: CraftsmanPin,
+    portfolioItems: List<PortfolioItem> = emptyList(),
     onDirectRequest: (CraftsmanPin) -> Unit,
     onSelectSpecialtyOnly: (CraftsmanPin) -> Unit,
     onDismiss: () -> Unit
@@ -503,12 +535,21 @@ fun CraftsmanDetailDialog(
                         .clip(CircleShape)
                         .background(ObsidianBlack)
                 ) {
-                    Text(
-                        text = pin.name.take(1),
-                        color = ElectricLime,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
+                    if (!pin.avatarUri.isNullOrBlank()) {
+                        AsyncImage(
+                            model = pin.avatarUri,
+                            contentDescription = pin.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text(
+                            text = pin.name.take(1),
+                            color = ElectricLime,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                    }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -539,7 +580,10 @@ fun CraftsmanDetailDialog(
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(14.dp),
@@ -580,6 +624,63 @@ fun CraftsmanDetailDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+
+                if (portfolioItems.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(Icons.Rounded.Workspaces, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "معرض الأعمال (${portfolioItems.size})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(portfolioItems, key = { it.id }) { work ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .width(150.dp)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        if (!work.photoUri.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = work.photoUri,
+                                                contentDescription = work.title,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(74.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                            )
+                                        }
+                                        Text(
+                                            text = work.title,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (work.description.isNotBlank()) {
+                                            Text(
+                                                text = work.description,
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Surface(
                     color = ElectricLimeSoft,

@@ -1,9 +1,7 @@
 package com.example
 
-import android.content.Context
 import android.os.Bundle
-import org.osmdroid.config.Configuration
-import java.io.File
+import com.mapbox.common.MapboxOptions
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,6 +55,7 @@ import com.example.data.local.UserPreferencesDataStore
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.UserRole
+import com.example.data.remote.FirestoreMarketplaceRepository
 import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.repository.HirafiRepository
 import com.example.ui.auth.GoogleAuthHelper
@@ -66,6 +65,7 @@ import com.example.ui.screens.ClientHomeScreen
 import com.example.ui.screens.CraftsmanDashboardScreen
 import com.example.ui.screens.CraftsmanVerificationScreen
 import com.example.ui.screens.OrdersHistoryScreen
+import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.RoleRegistrationScreen
 import com.example.ui.screens.SafetyScreen
 import com.example.ui.theme.HirafiTheme
@@ -79,19 +79,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val osmBase = File(cacheDir, "osmdroid").apply { mkdirs() }
-        val osmTiles = File(osmBase, "tiles").apply { mkdirs() }
-        Configuration.getInstance().apply {
-            load(applicationContext, getSharedPreferences("osmdroid_prefs", Context.MODE_PRIVATE))
-            userAgentValue = "HirafiAndroid/1.0 (+https://hirafi.app)"
-            osmdroidBasePath = osmBase
-            osmdroidTileCache = osmTiles
+        val mapboxToken = BuildConfig.MAPBOX_ACCESS_TOKEN.trim()
+        if (mapboxToken.isNotBlank() && !mapboxToken.contains("YOUR_MAPBOX_ACCESS_TOKEN")) {
+            MapboxOptions.accessToken = mapboxToken
         }
 
         val db = HirafiDatabase.getInstance(applicationContext)
         val prefs = UserPreferencesDataStore(applicationContext)
         val firestoreUserRepo = FirestoreUserProfileRepository(applicationContext)
-        val repository = HirafiRepository(db.hirafiDao(), prefs, firestoreUserRepo)
+        val firestoreMarketplaceRepo = FirestoreMarketplaceRepository(applicationContext)
+        val repository = HirafiRepository(db.hirafiDao(), prefs, firestoreUserRepo, firestoreMarketplaceRepo)
 
         setContent {
             HirafiTheme {
@@ -160,6 +157,7 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                     if (currentRoute != "home") {
                         navController.popBackStack("home", inclusive = false)
                     }
+                    viewModel.stopCloudListenersBeforeSignOut()
                     val credManager = CredentialManager.create(context)
                     GoogleAuthHelper.signOut(credManager, scope) {
                         viewModel.logoutAccount()
@@ -227,6 +225,13 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                         viewModel = viewModel,
                         onBack = { navController.popBackStack() },
                         onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                    )
+                }
+
+                composable("profile") {
+                    ProfileScreen(
+                        viewModel = viewModel,
+                        onBack = { navController.popBackStack() }
                     )
                 }
 

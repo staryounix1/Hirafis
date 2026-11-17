@@ -50,4 +50,19 @@ interface HirafiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertReview(review: ReviewEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertReviews(reviews: List<ReviewEntity>)
+
+    @Query("SELECT * FROM portfolio_items WHERE craftsmanId = :craftsmanId ORDER BY createdAtMillis DESC")
+    fun observePortfolioForCraftsman(craftsmanId: String): Flow<List<PortfolioItemEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPortfolioItem(item: PortfolioItemEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPortfolioItems(items: List<PortfolioItemEntity>)
+
+    @Query("DELETE FROM portfolio_items WHERE id = :itemId")
+    suspend fun deletePortfolioItem(itemId: String)
 }

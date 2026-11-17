@@ -89,6 +89,16 @@ enum class OfferSortOption(val labelAr: String) {
     TOP_RATED("الأعلى تقييماً")
 }
 
+data class PortfolioItem(
+    val id: String = "",
+    val craftsmanId: String = "",
+    val title: String = "",
+    val description: String = "",
+    val categoryName: String = "",
+    val photoUri: String? = null,
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
 data class CraftsmanPin(
     val id: String,
     val name: String,
@@ -104,7 +114,10 @@ data class CraftsmanPin(
     val phone: String,
     val isVerified: Boolean = true,
     val experienceYears: Int = 6,
-    val bio: String = "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية"
+    val bio: String = "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
+    val avatarUri: String? = null,
+    val portfolio: List<PortfolioItem> = emptyList(),
+    val isLiveCloud: Boolean = false
 )
 
 data class LiveRouteState(
@@ -241,6 +254,23 @@ object LoginValidator {
     }
 }
 
+object PhoneValidator {
+    fun normalize(input: String): String {
+        val stripped = input.trim().replace(" ", "").replace("-", "")
+        return if (stripped.startsWith("0") && stripped.length == 10) {
+            "+212" + stripped.drop(1)
+        } else {
+            stripped
+        }
+    }
+
+    fun isValidMoroccanPhone(input: String): Boolean {
+        val normalized = normalize(input)
+        return normalized.matches(Regex("^(\\+212|212)?[5-7][0-9]{8}$")) ||
+            normalized.matches(Regex("^\\+?[0-9]{8,15}$"))
+    }
+}
+
 data class UserSession(
     val userId: String = "local_user",
     val fullName: String = "يونس العلمي",
@@ -253,6 +283,10 @@ data class UserSession(
     val isCraftsmanSpecialtyLocked: Boolean = false,
     val isCraftsmanOnline: Boolean = true,
     val authProvider: String = "email",
+    val avatarUri: String? = null,
+    val bio: String = "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
+    val experienceYears: Int = 5,
+    val basePriceDh: Int = 120,
     val verificationStatus: IdentityVerificationStatus = IdentityVerificationStatus.NOT_SUBMITTED,
     val nationalIdNumber: String = "",
     val idFrontPhotoUri: String? = null,

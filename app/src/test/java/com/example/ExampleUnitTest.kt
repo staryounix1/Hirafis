@@ -17,6 +17,8 @@ import com.example.data.model.MoroccanLocations
 import com.example.data.model.OfferSortOption
 import com.example.data.model.OfferStatus
 import com.example.data.model.PaymentMethod
+import com.example.data.model.PhoneValidator
+import com.example.data.model.PortfolioItem
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
@@ -359,5 +361,35 @@ class ExampleUnitTest {
     val h2 = LoginValidator.hashPassword("user@gmail.com ", "secret123")
     assertEquals(64, h1.length)
     assertEquals(h1, h2)
+  }
+
+  @Test
+  fun `phone validator normalizes moroccan numbers and portfolio items hold craftsman metadata`() {
+    assertEquals("+212612345678", PhoneValidator.normalize("0612-345 678"))
+    assertTrue(PhoneValidator.isValidMoroccanPhone("0612345678"))
+    assertTrue(PhoneValidator.isValidMoroccanPhone("+212 661-234510"))
+    assertFalse(PhoneValidator.isValidMoroccanPhone("123"))
+
+    val work = PortfolioItem(
+      id = "p1",
+      craftsmanId = "uid_123",
+      title = "تركيب سخان ماء",
+      description = "تبديل كامل مع ضمان",
+      categoryName = "سباكة",
+      photoUri = "content://work_1",
+      createdAtMillis = 12345L
+    )
+    assertEquals("uid_123", work.craftsmanId)
+    assertEquals("تركيب سخان ماء", work.title)
+
+    val session = UserSession(
+      role = UserRole.CRAFTSMAN,
+      isRoleLocked = true,
+      experienceYears = 8,
+      basePriceDh = 160,
+      bio = "سباك محترف"
+    )
+    assertEquals(8, session.experienceYears)
+    assertEquals(160, session.basePriceDh)
   }
 }

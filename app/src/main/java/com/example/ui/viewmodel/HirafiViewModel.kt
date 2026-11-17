@@ -15,10 +15,13 @@ import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.HirafiCategories
 import com.example.data.model.IdentityVerificationValidator
 import com.example.data.model.LiveRouteState
+import com.example.data.model.LoginValidator
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.OfferSortOption
 import com.example.data.model.OfferStatus
 import com.example.data.model.PaymentMethod
+import com.example.data.model.PhoneValidator
+import com.example.data.model.PortfolioItem
 import com.example.data.model.RequestStatus
 import com.example.data.model.ReviewRecord
 import com.example.data.model.SearchPlaceResult
@@ -29,14 +32,22 @@ import com.example.data.model.UserSession
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseConfig
 import com.example.data.repository.HirafiRepository
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -107,7 +118,14 @@ class HirafiViewModel(
             MoroccanLocations.neighborhoods.first().lng
         )
     )
-    val nearbyCraftsmenFlow: StateFlow<List<CraftsmanPin>> = _nearbyCraftsmen.asStateFlow()
+    private val _liveCloudCraftsmen = MutableStateFlow<List<CraftsmanPin>>(emptyList())
+
+    val nearbyCraftsmenFlow: StateFlow<List<CraftsmanPin>> = combine(
+        _nearbyCraftsmen,
+        _liveCloudCraftsmen
+    ) { localPins, cloudPins ->
+        (cloudPins + localPins).distinctBy { it.id }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _nearbyCraftsmen.value)
 
     private val _craftsmanSearchQuery = MutableStateFlow("")
     val craftsmanSearchQuery: StateFlow<String> = _craftsmanSearchQuery.asStateFlow()
@@ -162,8 +180,39 @@ class HirafiViewModel(
     private var geocodeJob: Job? = null
     private var trackingJob: Job? = null
     private var gpsStreamJob: Job? = null
+    private var firestoreSyncJob: Job? = null
     private var activeTrackedRequestKey: String? = null
     private var lastCraftsmenCenter: Pair<Double, Double>? = null
+
+    private val _previewedCraftsmanId = MutableStateFlow<String?>(null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val myPortfolio: StateFlow<List<PortfolioItem>> = userSession
+        .flatMapLatest { s ->
+            if (s.role == UserRole.CRAFTSMAN && s.userId.isNotBlank()) {
+                repository.observePortfolioForCraftsman(s.userId)
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val previewedCraftsmanPortfolio: StateFlow<List<PortfolioItem>> = _previewedCraftsmanId
+        .flatMapLatest { id ->
+            if (id.isNullOrBlank()) flowOf(emptyList()) else repository.observePortfolioForCraftsman(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    private val firebaseUidFlow: Flow<String?> = callbackFlow {
+        val auth = Firebase.auth
+        val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            trySend(firebaseAuth.currentUser?.uid)
+        }
+        auth.addAuthStateListener(listener)
+        trySend(auth.currentUser?.uid)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }
 
     val tickerMillis: StateFlow<Long> = flow {
         while (true) {
@@ -173,7 +222,7 @@ class HirafiViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), System.currentTimeMillis())
 
     val filteredNearbyCraftsmen: StateFlow<List<CraftsmanPin>> = combine(
-        _nearbyCraftsmen,
+        nearbyCraftsmenFlow,
         combine(
             _craftsmanSearchQuery,
             _searchRadiusKm,
@@ -284,6 +333,23 @@ class HirafiViewModel(
     init {
         viewModelScope.launch {
             repository.seedInitialMarketplaceRequestsIfEmpty()
+        }
+        viewModelScope.launch {
+            combine(firebaseUidFlow, userSession) { uid, session ->
+                if (uid != null && session.isRoleLocked && session.authProvider == "google") {
+                    Triple(uid, session.role, session.craftsmanSpecialtyId)
+                } else {
+                    null
+                }
+            }.distinctUntilChanged().collect { active ->
+                if (active == null) {
+                    firestoreSyncJob?.cancel()
+                    firestoreSyncJob = null
+                    _liveCloudCraftsmen.value = emptyList()
+                } else {
+                    startFirestoreSync(active.second, active.third)
+                }
+            }
         }
         viewModelScope.launch {
             combine(allRequests, userSession, _activeClientRequestId) { requests, session, explicitId ->
@@ -463,7 +529,7 @@ class HirafiViewModel(
 
             if (nowMs - lastSupabaseSyncMs >= 5000L) {
                 lastSupabaseSyncMs = nowMs
-                repository.publishCraftsmanLiveLocation(fix.lat, fix.lng)
+                repository.publishCraftsmanLiveLocation(fix.lat, fix.lng, activeRequestId = req.id)
             }
         }
 
@@ -516,7 +582,11 @@ class HirafiViewModel(
 
         when (req.status) {
             RequestStatus.ACCEPTED -> {
-                val remotePos = req.assignedCraftsmanId?.let { repository.fetchAssignedCraftsmanLocation(it) }
+                val assignedId = req.assignedCraftsmanId
+                val isFirestoreCraftsman = !assignedId.isNullOrBlank() &&
+                    !assignedId.startsWith("c_") &&
+                    repository.isFirestoreAuthenticated
+                val remotePos = assignedId?.let { repository.fetchAssignedCraftsmanLocation(it) }
                 val cLat = remotePos?.first ?: pts.first().first
                 val cLng = remotePos?.second ?: pts.first().second
                 val activeRoute = if (remotePos != null) {
@@ -529,11 +599,52 @@ class HirafiViewModel(
                     remainingDistanceKm = activeRoute.distanceKm,
                     etaMinutes = activeRoute.durationMinutes
                 )
+                if (isFirestoreCraftsman) {
+                    repository.observeFirestoreRequestLiveCoords(req.id).collect { liveCoord ->
+                        if (liveCoord != null) {
+                            val updatedRoute = MapRoutingService.fetchDrivingRoute(
+                                liveCoord.first, liveCoord.second, req.lat, req.lng
+                            )
+                            _liveRoute.value = LiveRouteState(
+                                routePoints = updatedRoute.points,
+                                craftsmanLat = liveCoord.first,
+                                craftsmanLng = liveCoord.second,
+                                remainingDistanceKm = updatedRoute.distanceKm,
+                                etaMinutes = updatedRoute.durationMinutes
+                            )
+                        }
+                    }
+                }
             }
             RequestStatus.EN_ROUTE -> {
                 val assignedId = req.assignedCraftsmanId
+                val isFirestoreCraftsman = !assignedId.isNullOrBlank() &&
+                    !assignedId.startsWith("c_") &&
+                    repository.isFirestoreAuthenticated
                 val isRemoteCraftsmanUuid = assignedId != null && assignedId.length == 36
-                if (isRemoteCraftsmanUuid && SupabaseConfig.isConfigured) {
+                if (isFirestoreCraftsman) {
+                    // Seed initial route before live Firestore GPS snapshots arrive
+                    _liveRoute.value = LiveRouteState(
+                        routePoints = pts,
+                        craftsmanLat = pts.first().first,
+                        craftsmanLng = pts.first().second,
+                        remainingDistanceKm = route.distanceKm,
+                        etaMinutes = route.durationMinutes
+                    )
+                    repository.observeFirestoreRequestLiveCoords(req.id).collect { liveCoord ->
+                        if (liveCoord != null) {
+                            val dist = MapRoutingService.haversineKm(liveCoord.first, liveCoord.second, req.lat, req.lng)
+                            val updatedRoute = MapRoutingService.fetchDrivingRoute(liveCoord.first, liveCoord.second, req.lat, req.lng)
+                            _liveRoute.value = LiveRouteState(
+                                routePoints = updatedRoute.points,
+                                craftsmanLat = liveCoord.first,
+                                craftsmanLng = liveCoord.second,
+                                remainingDistanceKm = if (dist <= 0.08) 0.0 else updatedRoute.distanceKm,
+                                etaMinutes = if (dist <= 0.08) 0 else updatedRoute.durationMinutes
+                            )
+                        }
+                    }
+                } else if (isRemoteCraftsmanUuid && SupabaseConfig.isConfigured) {
                     // Real-time remote telemetry polling loop synced with craftsman's Play Services GPS
                     while (true) {
                         val liveCoord = repository.fetchAssignedCraftsmanLocation(assignedId)
@@ -1074,6 +1185,73 @@ class HirafiViewModel(
         }
     }
 
+    fun saveFullProfile(
+        fullName: String,
+        phone: String,
+        city: String,
+        avatarUri: String?,
+        bio: String,
+        experienceYears: Int,
+        basePriceDh: Int
+    ) {
+        val cleanName = fullName.trim()
+        if (!LoginValidator.isValidFullName(cleanName)) {
+            showMessage("يرجى إدخال الاسم الكامل (حرفان على الأقل)")
+            return
+        }
+        val cleanPhone = PhoneValidator.normalize(phone)
+        if (!PhoneValidator.isValidMoroccanPhone(cleanPhone)) {
+            showMessage("يرجى إدخال رقم هاتف مغربي صحيح (مثال: 0612345678)")
+            return
+        }
+        viewModelScope.launch {
+            repository.updateProfile(
+                fullName = cleanName,
+                phone = cleanPhone,
+                city = city,
+                avatarUri = avatarUri,
+                bio = bio,
+                experienceYears = experienceYears,
+                basePriceDh = basePriceDh
+            )
+            val coord = MoroccanLocations.coordForCity(city)
+            selectNeighborhood(city, coord.lat, coord.lng)
+            showMessage("تم حفظ الملف الشخصي بنجاح ✓")
+        }
+    }
+
+    fun addPortfolioWork(title: String, description: String, photoUri: String?) {
+        val cleanTitle = title.trim()
+        if (cleanTitle.length < 2) {
+            showMessage("يرجى إدخال عنوان قصير للعمل المنجز")
+            return
+        }
+        viewModelScope.launch {
+            repository.addPortfolioItem(cleanTitle, description, photoUri)
+                .onSuccess { showMessage("تمت إضافة العمل إلى معرض أعمالك ✓") }
+                .onFailure { showMessage(it.message ?: "تعذر حفظ العمل المنجز") }
+        }
+    }
+
+    fun deletePortfolioWork(itemId: String) {
+        viewModelScope.launch {
+            repository.deletePortfolioItem(itemId)
+            showMessage("تم حذف العمل من المعرض")
+        }
+    }
+
+    fun loadCraftsmanPortfolio(craftsmanId: String) {
+        _previewedCraftsmanId.value = craftsmanId
+        if (repository.isFirestoreAuthenticated && !craftsmanId.startsWith("c_")) {
+            viewModelScope.launch {
+                val remote = repository.fetchPortfolioOnce(craftsmanId)
+                if (remote.isNotEmpty()) {
+                    repository.cacheRemotePortfolio(remote)
+                }
+            }
+        }
+    }
+
     fun submitCraftsmanVerification(
         nationalIdNumber: String,
         frontPhotoUri: String?,
@@ -1146,11 +1324,83 @@ class HirafiViewModel(
         }
     }
 
-    fun logoutAccount() {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun startFirestoreSync(role: UserRole, specialtyId: String) {
+        firestoreSyncJob?.cancel()
+        firestoreSyncJob = viewModelScope.launch {
+            if (role == UserRole.CLIENT) {
+                launch {
+                    repository.observeFirestoreClientRequests().collect { list ->
+                        repository.cacheRemoteRequests(list)
+                    }
+                }
+                launch {
+                    val center = lastCraftsmenCenter ?: MoroccanLocations.coordForCity(userSession.value.city)
+                        .let { it.lat to it.lng }
+                    repository.observeFirestoreOnlineCraftsmen(center.first, center.second)
+                        .collect { cloudPins ->
+                            _liveCloudCraftsmen.value = cloudPins
+                        }
+                }
+                launch {
+                    activeClientRequest
+                        .flatMapLatest { req ->
+                            if (req != null && req.status == RequestStatus.SEARCHING) {
+                                repository.observeFirestoreOffersForRequest(req.id, UserRole.CLIENT)
+                            } else {
+                                emptyFlow()
+                            }
+                        }
+                        .collect { offers ->
+                            repository.cacheRemoteOffers(offers)
+                        }
+                }
+            } else {
+                launch {
+                    repository.observeFirestoreCraftsmanAssignedRequests().collect { list ->
+                        repository.cacheRemoteRequests(list)
+                    }
+                }
+                launch {
+                    repository.observeFirestoreSearchingRequests(specialtyId).collect { list ->
+                        repository.cacheRemoteRequests(list)
+                    }
+                }
+                launch {
+                    val uid = Firebase.auth.currentUser?.uid
+                    if (!uid.isNullOrBlank()) {
+                        repository.observeFirestorePortfolioForCraftsman(uid).collect { items ->
+                            repository.cacheRemotePortfolio(items)
+                        }
+                    }
+                }
+            }
+
+            launch {
+                _activeChatRequestId
+                    .flatMapLatest { reqId ->
+                        if (reqId.isNullOrBlank()) emptyFlow()
+                        else repository.observeFirestoreMessagesForRequest(reqId)
+                    }
+                    .collect { messages ->
+                        repository.cacheRemoteMessages(messages)
+                    }
+            }
+        }
+    }
+
+    fun stopCloudListenersBeforeSignOut() {
+        firestoreSyncJob?.cancel()
+        firestoreSyncJob = null
         trackingJob?.cancel()
         gpsStreamJob?.cancel()
+        _liveCloudCraftsmen.value = emptyList()
         activeTrackedRequestKey = null
         locationService?.stopForegroundJobTracking()
+    }
+
+    fun logoutAccount() {
+        stopCloudListenersBeforeSignOut()
         _activeClientRequestId.value = null
         _activeChatRequestId.value = null
         _pendingReviewRequest.value = null
@@ -1190,6 +1440,7 @@ class HirafiViewModel(
     }
 
     override fun onCleared() {
+        firestoreSyncJob?.cancel()
         trackingJob?.cancel()
         gpsStreamJob?.cancel()
         locationService?.stopForegroundJobTracking()
