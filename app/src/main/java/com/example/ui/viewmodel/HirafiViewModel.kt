@@ -9,10 +9,14 @@ import com.example.data.location.LiveTrackingState
 import com.example.data.location.RealTimeLocationService
 import com.example.data.location.RealTimeLocationSnapshot
 import com.example.data.model.AccountRolePolicy
+import com.example.data.model.AdminUserRecord
+import com.example.data.model.AppRuntimeConfig
+import com.example.data.model.AuthorizedAdminRecord
 import com.example.data.model.ChatMessage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.HirafiCategories
+import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.IdentityVerificationValidator
 import com.example.data.model.LiveRouteState
 import com.example.data.model.LoginValidator
@@ -29,9 +33,11 @@ import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.data.model.VerificationSubmission
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseConfig
 import com.example.data.repository.HirafiRepository
+import com.example.notifications.HirafiNotificationHelper
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -83,12 +89,14 @@ private data class CraftsmanFilterParams(
     val radiusKm: Int,
     val sort: CraftsmanSortOption,
     val onlySelectedCategory: Boolean,
-    val selectedCategoryId: String
+    val selectedCategoryId: String,
+    val onlyCloudCraftsmen: Boolean
 )
 
 class HirafiViewModel(
     private val repository: HirafiRepository,
-    private val locationService: RealTimeLocationService? = null
+    private val locationService: RealTimeLocationService? = null,
+    private val appContext: Context? = null
 ) : ViewModel() {
 
     val userSession: StateFlow<UserSession> = repository.userSession.stateIn(
@@ -120,12 +128,43 @@ class HirafiViewModel(
     )
     private val _liveCloudCraftsmen = MutableStateFlow<List<CraftsmanPin>>(emptyList())
 
+    private val _appRuntimeConfig = MutableStateFlow(AppRuntimeConfig())
+    val appRuntimeConfig: StateFlow<AppRuntimeConfig> = _appRuntimeConfig.asStateFlow()
+
+    private val _adminVerifications = MutableStateFlow<List<VerificationSubmission>>(emptyList())
+    val adminVerifications: StateFlow<List<VerificationSubmission>> = _adminVerifications.asStateFlow()
+
+    private val _adminUsers = MutableStateFlow<List<AdminUserRecord>>(emptyList())
+    val adminUsers: StateFlow<List<AdminUserRecord>> = _adminUsers.asStateFlow()
+
+    private val _adminAllRequests = MutableStateFlow<List<ServiceRequest>>(emptyList())
+    val adminAllRequests: StateFlow<List<ServiceRequest>> = _adminAllRequests.asStateFlow()
+
+    private val _authorizedAdmins = MutableStateFlow<List<AuthorizedAdminRecord>>(emptyList())
+    val authorizedAdmins: StateFlow<List<AuthorizedAdminRecord>> = _authorizedAdmins.asStateFlow()
+
     val nearbyCraftsmenFlow: StateFlow<List<CraftsmanPin>> = combine(
         _nearbyCraftsmen,
-        _liveCloudCraftsmen
-    ) { localPins, cloudPins ->
-        (cloudPins + localPins).distinctBy { it.id }
+        _liveCloudCraftsmen,
+        _draft,
+        _appRuntimeConfig
+    ) { localPins, cloudPins, draftState, runtimeConfig ->
+        val recomputedCloud = cloudPins.map { pin ->
+            val dist = MapRoutingService.haversineKm(draftState.lat, draftState.lng, pin.lat, pin.lng)
+                .coerceAtLeast(0.2)
+            val eta = (dist * 4.5).roundToInt().coerceIn(4, 35)
+            pin.copy(distanceKm = dist, etaMinutes = eta)
+        }
+        if (runtimeConfig.productionMode) {
+            recomputedCloud.distinctBy { it.id }
+        } else {
+            (recomputedCloud + localPins).distinctBy { it.id }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _nearbyCraftsmen.value)
+
+    val cloudCraftsmenCount: StateFlow<Int> = _liveCloudCraftsmen
+        .combine(_draft) { cloudPins, _ -> cloudPins.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), 0)
 
     private val _craftsmanSearchQuery = MutableStateFlow("")
     val craftsmanSearchQuery: StateFlow<String> = _craftsmanSearchQuery.asStateFlow()
@@ -138,6 +177,9 @@ class HirafiViewModel(
 
     private val _onlySelectedCategoryOnMap = MutableStateFlow(false)
     val onlySelectedCategoryOnMap: StateFlow<Boolean> = _onlySelectedCategoryOnMap.asStateFlow()
+
+    private val _onlyCloudCraftsmen = MutableStateFlow(false)
+    val onlyCloudCraftsmen: StateFlow<Boolean> = _onlyCloudCraftsmen.asStateFlow()
 
     private val _offerSort = MutableStateFlow(OfferSortOption.BEST_PRICE)
     val offerSort: StateFlow<OfferSortOption> = _offerSort.asStateFlow()
@@ -235,29 +277,21 @@ class HirafiViewModel(
                 radiusKm = radius,
                 sort = sort,
                 onlySelectedCategory = onlyCat,
-                selectedCategoryId = draftState.selectedCategoryId
+                selectedCategoryId = draftState.selectedCategoryId,
+                onlyCloudCraftsmen = false
             )
-        }
-    ) { pins, params ->
-        val q = params.query.trim()
-        val filtered = pins.filter { pin ->
-            val withinRadius = params.radiusKm >= 20 || pin.distanceKm <= params.radiusKm.toDouble()
-            val matchesCat = !params.onlySelectedCategory || pin.specialtyId == params.selectedCategoryId
-            val matchesQuery = q.isEmpty() ||
-                pin.name.contains(q, ignoreCase = true) ||
-                pin.specialtyName.contains(q, ignoreCase = true) ||
-                pin.bio.contains(q, ignoreCase = true)
-            withinRadius && matchesCat && matchesQuery
-        }
-        when (params.sort) {
-            CraftsmanSortOption.NEAREST -> filtered.sortedBy { it.distanceKm }
-            CraftsmanSortOption.TOP_RATED -> filtered.sortedWith(
-                compareByDescending<CraftsmanPin> { it.rating }.thenBy { it.distanceKm }
-            )
-            CraftsmanSortOption.LOWEST_PRICE -> filtered.sortedWith(
-                compareBy<CraftsmanPin> { it.basePriceDh }.thenBy { it.distanceKm }
-            )
-        }
+        },
+        _onlyCloudCraftsmen
+    ) { pins, baseParams, onlyCloud ->
+        filterAndSortCraftsmen(
+            pins = pins,
+            query = baseParams.query,
+            radiusKm = baseParams.radiusKm,
+            sort = baseParams.sort,
+            onlySelectedCategory = baseParams.onlySelectedCategory,
+            selectedCategoryId = baseParams.selectedCategoryId,
+            onlyCloudCraftsmen = onlyCloud
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _nearbyCraftsmen.value)
 
     val activeClientRequest: StateFlow<ServiceRequest?> = combine(
@@ -332,7 +366,15 @@ class HirafiViewModel(
 
     init {
         viewModelScope.launch {
-            repository.seedInitialMarketplaceRequestsIfEmpty()
+            combine(firebaseUidFlow, _appRuntimeConfig) { uid, config ->
+                (uid != null) to config.productionMode
+            }.distinctUntilChanged().collect { (isSignedIn, productionMode) ->
+                if (isSignedIn || productionMode) {
+                    repository.clearSeededRequests()
+                } else {
+                    repository.seedInitialMarketplaceRequestsIfEmpty()
+                }
+            }
         }
         viewModelScope.launch {
             combine(firebaseUidFlow, userSession) { uid, session ->
@@ -887,6 +929,10 @@ class HirafiViewModel(
         _onlySelectedCategoryOnMap.value = only
     }
 
+    fun toggleOnlyCloudCraftsmen(only: Boolean) {
+        _onlyCloudCraftsmen.value = only
+    }
+
     fun setOfferSort(sort: OfferSortOption) {
         _offerSort.value = sort
     }
@@ -916,8 +962,13 @@ class HirafiViewModel(
     }
 
     fun submitServiceRequest(preferredCraftsmanId: String? = null) {
+        if (userSession.value.isSuspended) {
+            showMessage("تم تعليق هذا الحساب مؤقتاً من طرف الإدارة")
+            return
+        }
         val current = _draft.value
         val radiusKm = _searchRadiusKm.value
+        val isProduction = _appRuntimeConfig.value.productionMode
         viewModelScope.launch {
             val req = repository.createServiceRequest(
                 categoryId = current.selectedCategoryId,
@@ -933,7 +984,8 @@ class HirafiViewModel(
                 isUrgent = current.isUrgent,
                 photoUri = current.photoUri,
                 preferredCraftsmanId = preferredCraftsmanId,
-                radiusKm = radiusKm
+                radiusKm = radiusKm,
+                productionMode = isProduction
             )
             _activeClientRequestId.value = req.id
             _draft.update { it.copy(title = "", description = "", photoUri = null) }
@@ -1020,6 +1072,10 @@ class HirafiViewModel(
     }
 
     fun craftsmanAcceptAtClientPrice(requestId: String) {
+        if (userSession.value.isSuspended) {
+            showMessage("تم تعليق حسابك مؤقتاً من طرف الإدارة")
+            return
+        }
         viewModelScope.launch {
             runCatching {
                 repository.craftsmanDirectAcceptRequest(requestId)
@@ -1032,6 +1088,10 @@ class HirafiViewModel(
     }
 
     fun craftsmanSubmitCounterOffer(requestId: String, offeredPrice: Int, etaMinutes: Int, note: String) {
+        if (userSession.value.isSuspended) {
+            showMessage("تم تعليق حسابك مؤقتاً من طرف الإدارة")
+            return
+        }
         viewModelScope.launch {
             runCatching {
                 repository.submitCraftsmanBid(requestId, offeredPrice, etaMinutes, note)
@@ -1069,84 +1129,70 @@ class HirafiViewModel(
         }
     }
 
-    fun registerFirstTimeAccount(
-        fullName: String,
-        email: String = "",
-        password: String = "",
-        phone: String = "+212 612-345678",
-        city: String,
-        role: UserRole,
-        specialtyId: String?
-    ) {
-        val cleanName = fullName.trim()
-        val cleanEmail = com.example.data.model.LoginValidator.normalizeEmail(email)
-        if (!com.example.data.model.LoginValidator.isValidFullName(cleanName)) {
-            showMessage("يرجى إدخال الاسم الكامل (حرفان على الأقل)")
-            return
-        }
-        if (!com.example.data.model.LoginValidator.isValidEmail(cleanEmail)) {
-            showMessage("يرجى إدخال بريد إلكتروني صحيح")
-            return
-        }
-        if (!com.example.data.model.LoginValidator.isValidPassword(password)) {
-            showMessage("يجب أن تتكون كلمة السر من 6 أحرف على الأقل")
-            return
-        }
-        val hash = com.example.data.model.LoginValidator.hashPassword(cleanEmail, password)
-        viewModelScope.launch {
-            val registered = repository.registerFirstTimeAccount(
-                fullName = cleanName,
-                email = cleanEmail,
-                phone = phone.trim().ifBlank { "+212 612-345678" },
-                city = city,
-                role = role,
-                specialtyId = specialtyId,
-                passwordHash = hash,
-                authProvider = "email"
-            )
-            if (registered) {
-                val coord = MoroccanLocations.coordForCity(city)
-                selectNeighborhood(city, coord.lat, coord.lng)
-                showMessage(
-                    if (role == UserRole.CRAFTSMAN)
-                        "مرحباً $cleanName! تم تسجيل الدخول كحرفي (${HirafiCategories.byId(specialtyId ?: "plumbing").nameAr})"
-                    else
-                        "مرحباً $cleanName! تم تسجيل الدخول كزبون بنجاح"
-                )
-            } else {
-                showMessage("تم قفل نوع الحساب مسبقاً ولا يمكن تغييره")
-            }
-        }
-    }
-
     fun completeGoogleSignIn(
         uid: String,
         displayName: String,
+        preferredDisplayName: String = "",
         email: String,
         city: String,
         preferredRole: UserRole,
         preferredSpecialtyId: String?
     ) {
         viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
             val result = repository.completeGoogleAccountLogin(
                 uid = uid,
                 displayName = displayName,
+                preferredDisplayName = preferredDisplayName,
                 email = email,
                 city = city,
                 preferredRole = preferredRole,
                 preferredSpecialtyId = preferredSpecialtyId
             )
             result.onSuccess { session ->
+                _authUiState.value = AuthUiState(isLoading = false)
                 val coord = MoroccanLocations.coordForCity(session.city)
                 selectNeighborhood(session.city, coord.lat, coord.lng)
-                showMessage(
-                    if (session.role == UserRole.CRAFTSMAN)
-                        "أهلاً ${session.fullName}! تم تسجيل الدخول بحساب غوغل (حرفي: ${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
-                    else
-                        "أهلاً ${session.fullName}! تم تسجيل الدخول بحساب غوغل (زبون)"
-                )
+                if (session.role != preferredRole) {
+                    showMessage(
+                        "هذا الحساب مسجل مسبقاً كـ ${session.role.labelAr} (مقفل). لإنشاء حساب ${preferredRole.labelAr} جديد، استخدم حساب غوغل آخر."
+                    )
+                } else {
+                    showMessage(
+                        when (session.role) {
+                            UserRole.ADMIN ->
+                                "مرحباً ${session.fullName}! تم تسجيل دخولك كأدمين رسمي للمنصة ✓"
+                            UserRole.CRAFTSMAN ->
+                                "أهلاً ${session.fullName}! تم حفظ حسابك في قاعدة البيانات كحرفي (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
+                            UserRole.CLIENT ->
+                                "أهلاً ${session.fullName}! تم حفظ حسابك في قاعدة البيانات كزبون"
+                        }
+                    )
+                }
             }.onFailure { err ->
-                showMessage(err.message ?: "تعذر إكمال تسجيل الدخول بحساب غوغل")
+                _authUiState.value = AuthUiState(isLoading = false, message = err.message, isError = true)
+                showMessage(err.message ?: "تعذر حفظ الحساب في قاعدة البيانات السحابية")
+            }
+        }
+    }
+
+    fun restoreExistingGoogleProfile(uid: String, email: String) {
+        viewModelScope.launch {
+            val result = repository.restoreExistingGoogleProfileIfLocked(uid, email)
+            result.onSuccess { restored ->
+                if (restored != null) {
+                    val coord = MoroccanLocations.coordForCity(restored.city)
+                    selectNeighborhood(restored.city, coord.lat, coord.lng)
+                }
+            }
+        }
+    }
+
+    fun clearLegacyLocalSessionIfNeeded() {
+        val current = userSession.value
+        if (Firebase.auth.currentUser == null && current.isRoleLocked && current.authProvider != "google") {
+            viewModelScope.launch {
+                repository.logoutAccount()
             }
         }
     }
@@ -1273,16 +1319,19 @@ class HirafiViewModel(
             return
         }
         viewModelScope.launch {
-            val ok = repository.submitCraftsmanIdentityVerification(
+            repository.submitCraftsmanIdentityVerification(
                 nationalIdNumber = normalizedCin,
                 frontPhotoUri = frontPhotoUri,
                 backPhotoUri = backPhotoUri,
                 selfiePhotoUri = selfiePhotoUri
-            )
-            if (ok) {
-                showMessage("تم استلام ملف التحقق من الهوية وجارٍ التوثيق الفوري...")
-            } else {
-                showMessage("تعذر إرسال ملف التحقق")
+            ).onSuccess { cloudImagesUploaded ->
+                if (cloudImagesUploaded) {
+                    showMessage("تم رفع الوثائق إلى السحابة وإرسالها لمراجعة الأدمين ✓")
+                } else {
+                    showMessage("تم إرسال طلب التوثيق لمراجعة الأدمين (لتفعيل رفع الصور سحابياً فعّل Storage في Firebase Console)")
+                }
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إرسال ملف التحقق")
             }
         }
     }
@@ -1292,6 +1341,64 @@ class HirafiViewModel(
         if (!AccountRolePolicy.canAccessIdentityVerification(current)) return
         viewModelScope.launch {
             repository.resetCraftsmanIdentityVerification()
+        }
+    }
+
+    fun setProductionMode(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setProductionMode(enabled)
+                .onSuccess {
+                    if (enabled) repository.clearSeededRequests()
+                    showMessage(
+                        if (enabled) "تم تفعيل وضع البيانات الحقيقية بالكامل ✓"
+                        else "تم الرجوع لوضع العرض المختلط"
+                    )
+                }
+                .onFailure { showMessage(it.message ?: "تعذر تحديث وضع الإنتاج") }
+        }
+    }
+
+    fun reviewVerification(craftsmanId: String, approved: Boolean, rejectionReason: String = "") {
+        viewModelScope.launch {
+            repository.reviewCraftsmanVerification(craftsmanId, approved, rejectionReason)
+                .onSuccess {
+                    showMessage(if (approved) "تم اعتماد وتوثيق الحرفي بنجاح ✓" else "تم رفض الطلب وإبلاغ الحرفي بالسبب")
+                }
+                .onFailure { showMessage(it.message ?: "تعذر تنفيذ المراجعة") }
+        }
+    }
+
+    fun toggleUserSuspended(userId: String, isCraftsman: Boolean, suspended: Boolean) {
+        viewModelScope.launch {
+            repository.toggleUserSuspended(userId, isCraftsman, suspended)
+                .onSuccess {
+                    showMessage(if (suspended) "تم تعليق الحساب" else "تم تفعيل الحساب من جديد")
+                }
+                .onFailure { showMessage(it.message ?: "تعذر تحديث حالة الحساب") }
+        }
+    }
+
+    fun cancelRequestAsAdmin(requestId: String) {
+        viewModelScope.launch {
+            repository.cancelRequestAsAdmin(requestId)
+                .onSuccess { showMessage("تم إلغاء الطلب من طرف الإدارة") }
+                .onFailure { showMessage(it.message ?: "تعذر إلغاء الطلب") }
+        }
+    }
+
+    fun addAuthorizedAdmin(email: String) {
+        viewModelScope.launch {
+            repository.addAuthorizedAdmin(email)
+                .onSuccess { showMessage("تمت إضافة الأدمين الجديد بنجاح ✓") }
+                .onFailure { showMessage(it.message ?: "تعذر إضافة البريد الإداري") }
+        }
+    }
+
+    fun removeAuthorizedAdmin(email: String) {
+        viewModelScope.launch {
+            repository.removeAuthorizedAdmin(email)
+                .onSuccess { showMessage("تمت إزالة صلاحية الأدمين عن $email") }
+                .onFailure { showMessage(it.message ?: "تعذر حذف البريد الإداري") }
         }
     }
 
@@ -1328,65 +1435,227 @@ class HirafiViewModel(
     private fun startFirestoreSync(role: UserRole, specialtyId: String) {
         firestoreSyncJob?.cancel()
         firestoreSyncJob = viewModelScope.launch {
-            if (role == UserRole.CLIENT) {
-                launch {
-                    repository.observeFirestoreClientRequests().collect { list ->
-                        repository.cacheRemoteRequests(list)
+            // Sync FCM Push Token
+            launch {
+                val token = HirafiNotificationHelper.fetchFcmTokenOrNull()
+                if (!token.isNullOrBlank()) {
+                    repository.syncFcmToken(token)
+                }
+            }
+
+            // Global Runtime Config (Production Mode toggle)
+            launch {
+                repository.observeAppRuntimeConfig().collect { cfg ->
+                    _appRuntimeConfig.value = cfg
+                    if (cfg.productionMode) {
+                        repository.clearSeededRequests()
                     }
                 }
-                launch {
-                    val center = lastCraftsmenCenter ?: MoroccanLocations.coordForCity(userSession.value.city)
-                        .let { it.lat to it.lng }
-                    repository.observeFirestoreOnlineCraftsmen(center.first, center.second)
-                        .collect { cloudPins ->
-                            _liveCloudCraftsmen.value = cloudPins
-                        }
-                }
-                launch {
-                    activeClientRequest
-                        .flatMapLatest { req ->
-                            if (req != null && req.status == RequestStatus.SEARCHING) {
-                                repository.observeFirestoreOffersForRequest(req.id, UserRole.CLIENT)
-                            } else {
-                                emptyFlow()
+            }
+
+            // Live Own Profile Sync (Verification decisions + Suspended status)
+            launch {
+                var lastStatus = userSession.value.verificationStatus
+                repository.observeMyCloudProfile().collect { profile ->
+                    if (profile != null) {
+                        val remoteStatus = IdentityVerificationStatus.fromDb(profile.verificationStatus)
+                        if (lastStatus == IdentityVerificationStatus.PENDING_REVIEW &&
+                            remoteStatus != lastStatus
+                        ) {
+                            when (remoteStatus) {
+                                IdentityVerificationStatus.VERIFIED -> {
+                                    postSystemNotification(
+                                        channelId = HirafiNotificationHelper.CHANNEL_ADMIN,
+                                        notifId = 3101,
+                                        title = "تهانينا! تم توثيق حسابك ✓",
+                                        body = "اعتمدت الإدارة بطاقتك الوطنية وحصلت على شارة الحرفي الموثق."
+                                    )
+                                    showMessage("تم اعتماد وتوثيق هويتك من طرف الإدارة ✓")
+                                }
+                                IdentityVerificationStatus.REJECTED -> {
+                                    val reasonText = profile.rejectionReason.ifBlank { "يرجى إعادة رفع صور أوضح." }
+                                    postSystemNotification(
+                                        channelId = HirafiNotificationHelper.CHANNEL_ADMIN,
+                                        notifId = 3102,
+                                        title = "تحديث بخصوص ملف التوثيق",
+                                        body = reasonText
+                                    )
+                                    showMessage("تم رفض ملف التوثيق: $reasonText")
+                                }
+                                else -> {}
                             }
                         }
-                        .collect { offers ->
-                            repository.cacheRemoteOffers(offers)
+                        lastStatus = remoteStatus
+                        repository.applyRemoteVerificationUpdate(
+                            status = remoteStatus,
+                            rejectionReason = profile.rejectionReason,
+                            isSuspended = profile.isSuspended
+                        )
+                    }
+                }
+            }
+
+            when (role) {
+                UserRole.CLIENT -> {
+                    launch {
+                        repository.observeFirestoreClientRequests().collect { list ->
+                            repository.cacheRemoteRequests(list)
                         }
-                }
-            } else {
-                launch {
-                    repository.observeFirestoreCraftsmanAssignedRequests().collect { list ->
-                        repository.cacheRemoteRequests(list)
+                    }
+                    launch {
+                        val center = lastCraftsmenCenter ?: MoroccanLocations.coordForCity(userSession.value.city)
+                            .let { it.lat to it.lng }
+                        repository.observeFirestoreOnlineCraftsmen(center.first, center.second)
+                            .collect { cloudPins ->
+                                _liveCloudCraftsmen.value = cloudPins
+                            }
+                    }
+                    launch {
+                        var baselineReady = false
+                        val seenOfferIds = mutableSetOf<String>()
+                        activeClientRequest
+                            .flatMapLatest { req ->
+                                baselineReady = false
+                                seenOfferIds.clear()
+                                if (req != null && req.status == RequestStatus.SEARCHING) {
+                                    repository.observeFirestoreOffersForRequest(req.id, UserRole.CLIENT)
+                                } else {
+                                    emptyFlow()
+                                }
+                            }
+                            .collect { offers ->
+                                repository.cacheRemoteOffers(offers)
+                                if (!baselineReady) {
+                                    seenOfferIds.addAll(offers.map { it.id })
+                                    baselineReady = true
+                                } else {
+                                    offers.filter { it.id !in seenOfferIds }.forEach { newOffer ->
+                                        seenOfferIds.add(newOffer.id)
+                                        postSystemNotification(
+                                            channelId = HirafiNotificationHelper.CHANNEL_ORDERS,
+                                            notifId = newOffer.id.hashCode(),
+                                            title = "عرض جديد من ${newOffer.craftsmanName}",
+                                            body = "${newOffer.offeredPrice} درهم • يصل خلال ${newOffer.etaMinutes} د"
+                                        )
+                                    }
+                                }
+                            }
                     }
                 }
-                launch {
-                    repository.observeFirestoreSearchingRequests(specialtyId).collect { list ->
-                        repository.cacheRemoteRequests(list)
+
+                UserRole.CRAFTSMAN -> {
+                    launch {
+                        val gps = _userGpsLocation.value
+                        repository.syncCraftsmanDirectoryPresence(gps?.first, gps?.second)
+                    }
+                    launch {
+                        repository.observeFirestoreCraftsmanAssignedRequests().collect { list ->
+                            repository.cacheRemoteRequests(list)
+                        }
+                    }
+                    launch {
+                        var baselineReady = false
+                        val seenReqIds = mutableSetOf<String>()
+                        repository.observeFirestoreSearchingRequests(specialtyId).collect { list ->
+                            repository.cacheRemoteRequests(list)
+                            if (!baselineReady) {
+                                seenReqIds.addAll(list.map { it.id })
+                                baselineReady = true
+                            } else {
+                                list.filter { it.id !in seenReqIds }.forEach { req ->
+                                    seenReqIds.add(req.id)
+                                    postSystemNotification(
+                                        channelId = HirafiNotificationHelper.CHANNEL_ORDERS,
+                                        notifId = req.id.hashCode(),
+                                        title = "طلب ${req.categoryName} جديد قريب منك",
+                                        body = "${req.title} • ${req.proposedPrice} درهم (${req.addressLabel})"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    launch {
+                        val uid = Firebase.auth.currentUser?.uid
+                        if (!uid.isNullOrBlank()) {
+                            repository.observeFirestorePortfolioForCraftsman(uid).collect { items ->
+                                repository.cacheRemotePortfolio(items)
+                            }
+                        }
                     }
                 }
-                launch {
-                    val uid = Firebase.auth.currentUser?.uid
-                    if (!uid.isNullOrBlank()) {
-                        repository.observeFirestorePortfolioForCraftsman(uid).collect { items ->
-                            repository.cacheRemotePortfolio(items)
+
+                UserRole.ADMIN -> {
+                    launch {
+                        repository.observeAdminVerificationSubmissions().collect { list ->
+                            _adminVerifications.value = list
+                        }
+                    }
+                    launch {
+                        repository.observeAdminAllUsers().collect { list ->
+                            _adminUsers.value = list
+                        }
+                    }
+                    launch {
+                        repository.observeAdminAllRequests().collect { list ->
+                            _adminAllRequests.value = list
+                        }
+                    }
+                    launch {
+                        repository.observeAuthorizedAdmins().collect { list ->
+                            _authorizedAdmins.value = list
                         }
                     }
                 }
             }
 
-            launch {
-                _activeChatRequestId
-                    .flatMapLatest { reqId ->
-                        if (reqId.isNullOrBlank()) emptyFlow()
-                        else repository.observeFirestoreMessagesForRequest(reqId)
-                    }
-                    .collect { messages ->
-                        repository.cacheRemoteMessages(messages)
-                    }
+            if (role != UserRole.ADMIN) {
+                launch {
+                    val myUid = Firebase.auth.currentUser?.uid
+                    var msgBaselineReady = false
+                    val seenMsgIds = mutableSetOf<String>()
+                    _activeChatRequestId
+                        .flatMapLatest { reqId ->
+                            msgBaselineReady = false
+                            seenMsgIds.clear()
+                            if (reqId.isNullOrBlank()) emptyFlow()
+                            else repository.observeFirestoreMessagesForRequest(reqId)
+                        }
+                        .collect { messages ->
+                            repository.cacheRemoteMessages(messages)
+                            if (!msgBaselineReady) {
+                                seenMsgIds.addAll(messages.map { it.id })
+                                msgBaselineReady = true
+                            } else {
+                                messages.filter { it.id !in seenMsgIds && it.senderId != myUid }.forEach { msg ->
+                                    seenMsgIds.add(msg.id)
+                                    postSystemNotification(
+                                        channelId = HirafiNotificationHelper.CHANNEL_MESSAGES,
+                                        notifId = msg.id.hashCode(),
+                                        title = "رسالة من ${msg.senderName}",
+                                        body = msg.text
+                                    )
+                                }
+                            }
+                        }
+                }
             }
         }
+    }
+
+    private fun postSystemNotification(
+        channelId: String,
+        notifId: Int,
+        title: String,
+        body: String
+    ) {
+        val ctx = appContext ?: return
+        HirafiNotificationHelper.showNotification(
+            context = ctx,
+            channelId = channelId,
+            notificationId = notifId,
+            title = title,
+            body = body
+        )
     }
 
     fun stopCloudListenersBeforeSignOut() {
@@ -1395,6 +1664,10 @@ class HirafiViewModel(
         trackingJob?.cancel()
         gpsStreamJob?.cancel()
         _liveCloudCraftsmen.value = emptyList()
+        _adminVerifications.value = emptyList()
+        _adminUsers.value = emptyList()
+        _adminAllRequests.value = emptyList()
+        _authorizedAdmins.value = emptyList()
         activeTrackedRequestKey = null
         locationService?.stopForegroundJobTracking()
     }
@@ -1448,14 +1721,58 @@ class HirafiViewModel(
     }
 
     companion object {
+        fun filterAndSortCraftsmen(
+            pins: List<CraftsmanPin>,
+            query: String,
+            radiusKm: Int,
+            sort: CraftsmanSortOption,
+            onlySelectedCategory: Boolean,
+            selectedCategoryId: String,
+            onlyCloudCraftsmen: Boolean = false
+        ): List<CraftsmanPin> {
+            val q = query.trim()
+            val isSearchingByText = q.isNotEmpty()
+            val filtered = pins.filter { pin ->
+                val withinRadius = isSearchingByText ||
+                    onlyCloudCraftsmen ||
+                    radiusKm >= 20 ||
+                    pin.distanceKm <= radiusKm.toDouble()
+                val matchesCat = !onlySelectedCategory || pin.specialtyId == selectedCategoryId
+                val matchesCloud = !onlyCloudCraftsmen || pin.isLiveCloud
+                val matchesQuery = q.isEmpty() ||
+                    pin.name.contains(q, ignoreCase = true) ||
+                    pin.specialtyName.contains(q, ignoreCase = true) ||
+                    pin.bio.contains(q, ignoreCase = true) ||
+                    pin.city.contains(q, ignoreCase = true)
+                withinRadius && matchesCat && matchesCloud && matchesQuery
+            }
+            return when (sort) {
+                CraftsmanSortOption.NEAREST -> filtered.sortedWith(
+                    compareBy<CraftsmanPin> { it.distanceKm }
+                        .thenByDescending { it.isLiveCloud }
+                )
+                CraftsmanSortOption.TOP_RATED -> filtered.sortedWith(
+                    compareByDescending<CraftsmanPin> { it.rating }
+                        .thenByDescending { it.isLiveCloud }
+                        .thenBy { it.distanceKm }
+                )
+                CraftsmanSortOption.LOWEST_PRICE -> filtered.sortedWith(
+                    compareBy<CraftsmanPin> { it.basePriceDh }
+                        .thenByDescending { it.isLiveCloud }
+                        .thenBy { it.distanceKm }
+                )
+            }
+        }
+
         fun factory(
             repository: HirafiRepository,
-            locationService: RealTimeLocationService? = null
+            locationService: RealTimeLocationService? = null,
+            appContext: Context? = null
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return HirafiViewModel(repository, locationService) as T
+                    return HirafiViewModel(repository, locationService, appContext?.applicationContext) as T
                 }
             }
     }

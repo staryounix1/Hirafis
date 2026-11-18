@@ -3,8 +3,12 @@ package com.example
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.AcceptanceRadarMetrics
 import com.example.data.model.AccountRolePolicy
+import com.example.data.model.AdminAuthorizationPolicy
+import com.example.data.model.AppRuntimeConfig
 import com.example.data.model.BiddingSessionSummary
 import com.example.data.model.CounterOfferSubmission
+import com.example.data.model.CraftsmanPin
+import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.FairPriceAssessment
 import com.example.data.model.HirafiCategories
 import com.example.data.model.HirafiQuickScenarios
@@ -26,6 +30,7 @@ import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.data.remote.MapRoutingService
 import com.example.data.repository.HirafiRepository
+import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -391,5 +396,156 @@ class ExampleUnitTest {
     )
     assertEquals(8, session.experienceYears)
     assertEquals(160, session.basePriceDh)
+  }
+
+  @Test
+  fun `craftsman search finds distant cloud craftsman by name or city and supports cloud filter`() {
+    val pins = listOf(
+      CraftsmanPin(
+        id = "local_1",
+        name = "رشيد المحلي",
+        specialtyId = "plumbing",
+        specialtyName = "سباكة",
+        rating = 4.6,
+        completedJobs = 30,
+        lat = 33.58,
+        lng = -7.63,
+        basePriceDh = 140,
+        distanceKm = 2.0,
+        etaMinutes = 6,
+        phone = "+212600000001",
+        experienceYears = 4,
+        bio = "سباك في المعاريف",
+        isLiveCloud = false,
+        city = "الدار البيضاء"
+      ),
+      CraftsmanPin(
+        id = "cloud_distant",
+        name = "يوسف الحرفي",
+        specialtyId = "electricity",
+        specialtyName = "كهرباء",
+        rating = 4.95,
+        completedJobs = 85,
+        lat = 34.02,
+        lng = -6.84,
+        basePriceDh = 110,
+        distanceKm = 85.0,
+        etaMinutes = 120,
+        phone = "+212600000002",
+        experienceYears = 9,
+        bio = "كهربائي منازل محترف",
+        isLiveCloud = true,
+        city = "الرباط"
+      ),
+      CraftsmanPin(
+        id = "cloud_near",
+        name = "سعيد السحابي",
+        specialtyId = "plumbing",
+        specialtyName = "سباكة",
+        rating = 4.8,
+        completedJobs = 45,
+        lat = 33.58,
+        lng = -7.62,
+        basePriceDh = 120,
+        distanceKm = 2.0,
+        etaMinutes = 7,
+        phone = "+212600000003",
+        experienceYears = 6,
+        bio = "إصلاح فوري",
+        isLiveCloud = true,
+        city = "الدار البيضاء"
+      )
+    )
+
+    // Without text query or cloud filter, 5 km cutoff hides distant craftsman; cloud tie-breaker wins at equal 2.0 km
+    val nearbyOnly = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.NEAREST,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = false
+    )
+    assertEquals(listOf("cloud_near", "local_1"), nearbyOnly.map { it.id })
+
+    // Text search by name finds distant cloud craftsman even when radius is 5 km
+    val byName = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "يوسف",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.NEAREST,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = false
+    )
+    assertEquals(listOf("cloud_distant"), byName.map { it.id })
+
+    // Text search by city also finds distant cloud craftsman across cities
+    val byCity = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "الرباط",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.NEAREST,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = false
+    )
+    assertEquals(listOf("cloud_distant"), byCity.map { it.id })
+
+    // Cloud-only filter shows all cloud craftsmen regardless of 5 km cutoff and supports TOP_RATED / LOWEST_PRICE sorting
+    val cloudTopRated = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.TOP_RATED,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = true
+    )
+    assertEquals(listOf("cloud_distant", "cloud_near"), cloudTopRated.map { it.id })
+
+    val cloudLowestPrice = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.LOWEST_PRICE,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = true
+    )
+    assertEquals(listOf("cloud_distant", "cloud_near"), cloudLowestPrice.map { it.id })
+  }
+
+  @Test
+  fun `admin role policy authorizes admin dashboard only for locked admin and supports rejected kyc status`() {
+    val adminSession = UserSession(
+      role = UserRole.ADMIN,
+      isRoleLocked = true,
+      email = AdminAuthorizationPolicy.BOOTSTRAP_ADMIN_EMAIL
+    )
+    val clientSession = UserSession(role = UserRole.CLIENT, isRoleLocked = true)
+    val craftsmanSession = UserSession(
+      role = UserRole.CRAFTSMAN,
+      isRoleLocked = true,
+      verificationStatus = IdentityVerificationStatus.REJECTED,
+      rejectionReason = "البطاقة غير واضحة"
+    )
+
+    assertTrue(AccountRolePolicy.canAccessAdminDashboard(adminSession))
+    assertTrue(adminSession.isAdmin)
+    assertFalse(AccountRolePolicy.canAccessAdminDashboard(clientSession))
+    assertFalse(AccountRolePolicy.canAccessAdminDashboard(craftsmanSession))
+    assertFalse(AccountRolePolicy.canAccessIdentityVerification(adminSession))
+
+    assertEquals(UserRole.ADMIN, UserRole.fromDb("admin"))
+    assertEquals(UserRole.CLIENT, UserRole.fromDb("unknown_role"))
+    assertEquals(IdentityVerificationStatus.REJECTED, IdentityVerificationStatus.fromDb("rejected"))
+    assertEquals("youness065220@gmail.com", AdminAuthorizationPolicy.BOOTSTRAP_ADMIN_EMAIL)
+
+    val defaultConfig = AppRuntimeConfig()
+    assertFalse(defaultConfig.productionMode)
+    val prodConfig = AppRuntimeConfig(productionMode = true, updatedByEmail = adminSession.email)
+    assertTrue(prodConfig.productionMode)
   }
 }

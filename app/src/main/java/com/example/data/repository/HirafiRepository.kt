@@ -8,6 +8,9 @@ import com.example.data.local.ReviewEntity
 import com.example.data.local.ServiceOfferEntity
 import com.example.data.local.ServiceRequestEntity
 import com.example.data.local.UserPreferencesDataStore
+import com.example.data.model.AdminUserRecord
+import com.example.data.model.AppRuntimeConfig
+import com.example.data.model.AuthorizedAdminRecord
 import com.example.data.model.ChatMessage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.HirafiCategories
@@ -22,7 +25,11 @@ import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.data.model.VerificationSubmission
+import com.example.data.remote.FirebaseCloudStorageService
+import com.example.data.remote.FirestoreAdminRepository
 import com.example.data.remote.FirestoreMarketplaceRepository
+import com.example.data.remote.FirestoreUserProfile
 import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseAuthRequest
@@ -52,7 +59,9 @@ class HirafiRepository(
     private val dao: HirafiDao,
     private val prefs: UserPreferencesDataStore,
     private val firestoreUserRepo: FirestoreUserProfileRepository? = null,
-    private val firestoreMarketplaceRepo: FirestoreMarketplaceRepository? = null
+    private val firestoreMarketplaceRepo: FirestoreMarketplaceRepository? = null,
+    private val firestoreAdminRepo: FirestoreAdminRepository? = null,
+    private val cloudStorageService: FirebaseCloudStorageService? = null
 ) {
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -132,7 +141,45 @@ class HirafiRepository(
         dao.upsertPortfolioItems(items.map { it.toEntity() })
     }
 
+    fun observeMyCloudProfile(): Flow<FirestoreUserProfile?> =
+        firestoreUserRepo?.observeMyProfile() ?: emptyFlow()
+
+    fun observeAppRuntimeConfig(): Flow<AppRuntimeConfig> =
+        firestoreAdminRepo?.observeAppRuntimeConfig() ?: emptyFlow()
+
+    fun observeAdminVerificationSubmissions(): Flow<List<VerificationSubmission>> =
+        firestoreAdminRepo?.observeVerificationSubmissions() ?: emptyFlow()
+
+    fun observeAdminAllUsers(): Flow<List<AdminUserRecord>> =
+        firestoreAdminRepo?.observeAllUsers() ?: emptyFlow()
+
+    fun observeAdminAllRequests(): Flow<List<ServiceRequest>> =
+        firestoreAdminRepo?.observeAllServiceRequests() ?: emptyFlow()
+
+    fun observeAuthorizedAdmins(): Flow<List<AuthorizedAdminRecord>> =
+        firestoreAdminRepo?.observeAuthorizedAdmins() ?: emptyFlow()
+
+    suspend fun clearSeededRequests() {
+        dao.clearSeededRequests()
+    }
+
+    suspend fun syncFcmToken(token: String) {
+        if (token.isBlank()) return
+        prefs.saveFcmToken(token)
+        firestoreUserRepo?.updateFcmToken(token)
+    }
+
+    suspend fun applyRemoteVerificationUpdate(
+        status: IdentityVerificationStatus,
+        rejectionReason: String,
+        isSuspended: Boolean
+    ) {
+        prefs.updateIdentityVerificationStatus(status, rejectionReason)
+        prefs.setSuspended(isSuspended)
+    }
+
     suspend fun seedInitialMarketplaceRequestsIfEmpty() {
+        if (isFirestoreAuthenticated) return
         val existing = dao.observeAllRequests().first()
         if (existing.isNotEmpty()) return
         val now = System.currentTimeMillis()
@@ -253,34 +300,39 @@ class HirafiRepository(
     suspend fun completeGoogleAccountLogin(
         uid: String,
         displayName: String,
+        preferredDisplayName: String = "",
         email: String,
         city: String,
         preferredRole: UserRole,
         preferredSpecialtyId: String?
     ): Result<UserSession> {
-        val resolvedName = displayName.trim().ifBlank { email.substringBefore("@").ifBlank { "مستخدم غوغل" } }
+        val userRepo = firestoreUserRepo
+            ?: return Result.failure(IllegalStateException("تعذر الاتصال بخدمة قاعدة البيانات السحابية"))
+        val resolvedName = preferredDisplayName.trim().takeIf { it.length >= 2 }
+            ?: displayName.trim().takeIf { it.length >= 2 }
+            ?: email.substringBefore("@").trim().takeIf { it.length >= 2 }
+            ?: "مستخدم غوغل"
         val resolvedSpec = preferredSpecialtyId ?: "plumbing"
 
-        val synced = firestoreUserRepo?.syncOrRestoreProfile(
+        val synced = userRepo.syncOrRestoreProfile(
             fullName = resolvedName,
             email = email,
             city = city,
             chosenRole = preferredRole.dbValue,
             chosenSpecialtyId = resolvedSpec
-        )?.getOrNull()
+        ).getOrElse { err ->
+            return Result.failure(err)
+        }
 
-        val finalRole = if (synced?.role == UserRole.CRAFTSMAN.dbValue) UserRole.CRAFTSMAN
-        else if (synced?.role == UserRole.CLIENT.dbValue) UserRole.CLIENT
-        else preferredRole
-
+        val finalRole = UserRole.fromDb(synced.role)
         val finalSpecialty = if (finalRole == UserRole.CRAFTSMAN) {
-            synced?.specialtyId?.takeIf { it.isNotBlank() } ?: resolvedSpec
+            synced.specialtyId.takeIf { it.isNotBlank() } ?: resolvedSpec
         } else null
 
-        val finalName = synced?.fullName?.takeIf { it.isNotBlank() } ?: resolvedName
-        val finalEmail = synced?.email?.takeIf { it.isNotBlank() } ?: email
-        val finalCity = synced?.city?.takeIf { it.isNotBlank() } ?: city
-        val finalPhone = synced?.phone?.takeIf { it.isNotBlank() } ?: "+212 612-345678"
+        val finalName = synced.fullName.takeIf { it.isNotBlank() } ?: resolvedName
+        val finalEmail = synced.email.takeIf { it.isNotBlank() } ?: email
+        val finalCity = synced.city.takeIf { it.isNotBlank() } ?: city
+        val finalPhone = synced.phone.takeIf { it.isNotBlank() } ?: "+212 612-345678"
 
         prefs.registerFirstTimeAccount(
             fullName = finalName,
@@ -291,17 +343,81 @@ class HirafiRepository(
             specialtyId = finalSpecialty,
             authProvider = "google",
             userIdOverride = uid,
-            avatarUri = synced?.avatarUri,
-            bio = synced?.bio,
-            experienceYears = synced?.experienceYears?.toInt(),
-            basePriceDh = synced?.basePriceDh?.toInt()
+            avatarUri = synced.avatarUri,
+            bio = synced.bio,
+            experienceYears = synced.experienceYears.toInt(),
+            basePriceDh = synced.basePriceDh.toInt(),
+            verificationStatus = IdentityVerificationStatus.fromDb(synced.verificationStatus),
+            rejectionReason = synced.rejectionReason,
+            isSuspended = synced.isSuspended,
+            forceOverwrite = true
         )
         val updatedSession = prefs.userSessionFlow.first()
         if (finalRole == UserRole.CRAFTSMAN) {
             val coord = MoroccanLocations.coordForCity(updatedSession.city)
+            val dirResult = firestoreMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
+            if (dirResult != null && dirResult.isFailure) {
+                return Result.failure(
+                    dirResult.exceptionOrNull()
+                        ?: IllegalStateException("تم حفظ حسابك ولكن تعذر نشر ملفك في دليل الحرفيين")
+                )
+            }
+        }
+        return Result.success(updatedSession)
+    }
+
+    suspend fun restoreExistingGoogleProfileIfLocked(
+        uid: String,
+        fallbackEmail: String
+    ): Result<UserSession?> {
+        val userRepo = firestoreUserRepo ?: return Result.success(null)
+        val existing = userRepo.fetchExistingProfileIfLocked().getOrElse { err ->
+            return Result.failure(err)
+        } ?: return Result.success(null)
+
+        val restoredRole = UserRole.fromDb(existing.role)
+        val restoredSpec = if (restoredRole == UserRole.CRAFTSMAN) {
+            existing.specialtyId.takeIf { it.isNotBlank() } ?: "plumbing"
+        } else null
+        prefs.registerFirstTimeAccount(
+            fullName = existing.fullName.ifBlank { "مستخدم حرفي" },
+            email = existing.email.ifBlank { fallbackEmail },
+            phone = existing.phone.ifBlank { "+212 612-345678" },
+            city = existing.city.ifBlank { "الدار البيضاء" },
+            role = restoredRole,
+            specialtyId = restoredSpec,
+            authProvider = "google",
+            userIdOverride = uid,
+            avatarUri = existing.avatarUri,
+            bio = existing.bio,
+            experienceYears = existing.experienceYears.toInt(),
+            basePriceDh = existing.basePriceDh.toInt(),
+            verificationStatus = IdentityVerificationStatus.fromDb(existing.verificationStatus),
+            rejectionReason = existing.rejectionReason,
+            isSuspended = existing.isSuspended,
+            forceOverwrite = true
+        )
+        val updatedSession = prefs.userSessionFlow.first()
+        if (restoredRole == UserRole.CRAFTSMAN) {
+            val coord = MoroccanLocations.coordForCity(updatedSession.city)
             firestoreMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
         }
         return Result.success(updatedSession)
+    }
+
+    suspend fun syncCraftsmanDirectoryPresence(
+        latOverride: Double? = null,
+        lngOverride: Double? = null
+    ): Result<Unit> {
+        val session = prefs.userSessionFlow.first()
+        if (session.role != UserRole.CRAFTSMAN || !isFirestoreAuthenticated) {
+            return Result.success(Unit)
+        }
+        val cityCoord = MoroccanLocations.coordForCity(session.city)
+        val lat = latOverride ?: cityCoord.lat
+        val lng = lngOverride ?: cityCoord.lng
+        return firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session, lat, lng)
+            ?: Result.success(Unit)
     }
 
     suspend fun setCraftsmanOnline(isOnline: Boolean) {
@@ -349,11 +465,15 @@ class HirafiRepository(
         experienceYears: Int? = null,
         basePriceDh: Int? = null
     ) {
+        val cloudAvatarUri = if (!avatarUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadAvatar(avatarUri).getOrNull() ?: avatarUri
+        } else avatarUri
+
         prefs.updateProfile(
             fullName = fullName,
             phone = phone,
             city = city,
-            avatarUri = avatarUri,
+            avatarUri = cloudAvatarUri,
             bio = bio,
             experienceYears = experienceYears,
             basePriceDh = basePriceDh
@@ -391,13 +511,17 @@ class HirafiRepository(
         val category = HirafiCategories.byId(session.craftsmanSpecialtyId)
         val itemId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
+        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadPortfolioPhoto(itemId, photoUri).getOrNull() ?: photoUri
+        } else photoUri
+
         val item = PortfolioItem(
             id = itemId,
             craftsmanId = session.userId,
             title = cleanTitle.take(80),
             description = description.trim().take(350),
             categoryName = category.nameAr,
-            photoUri = photoUri?.trim()?.takeIf { it.isNotBlank() }?.take(500),
+            photoUri = uploadedPhotoUri?.trim()?.takeIf { it.isNotBlank() }?.take(500),
             createdAtMillis = now
         )
         dao.upsertPortfolioItem(item.toEntity())
@@ -415,33 +539,97 @@ class HirafiRepository(
         frontPhotoUri: String,
         backPhotoUri: String,
         selfiePhotoUri: String
-    ): Boolean {
+    ): Result<Boolean> {
         val session = prefs.userSessionFlow.first()
-        if (session.role != UserRole.CRAFTSMAN) return false
+        if (session.role != UserRole.CRAFTSMAN) {
+            return Result.failure(IllegalStateException("التحقق من الهوية مخصص للحرفيين فقط"))
+        }
+
+        var cloudImagesUploaded = true
+        val finalFront = if (cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadVerificationPhoto("front", frontPhotoUri).getOrElse {
+                cloudImagesUploaded = false
+                frontPhotoUri
+            }
+        } else frontPhotoUri
+
+        val finalBack = if (cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadVerificationPhoto("back", backPhotoUri).getOrElse {
+                cloudImagesUploaded = false
+                backPhotoUri
+            }
+        } else backPhotoUri
+
+        val finalSelfie = if (cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadVerificationPhoto("selfie", selfiePhotoUri).getOrElse {
+                cloudImagesUploaded = false
+                selfiePhotoUri
+            }
+        } else selfiePhotoUri
+
         prefs.saveIdentityVerificationSubmission(
             nationalIdNumber = nationalIdNumber,
-            frontPhotoUri = frontPhotoUri,
-            backPhotoUri = backPhotoUri,
-            selfiePhotoUri = selfiePhotoUri,
+            frontPhotoUri = finalFront,
+            backPhotoUri = finalBack,
+            selfiePhotoUri = finalSelfie,
             status = IdentityVerificationStatus.PENDING_REVIEW
         )
-        repoScope.launch {
-            delay(2600L)
-            val latest = prefs.userSessionFlow.first()
-            if (latest.role == UserRole.CRAFTSMAN &&
-                latest.verificationStatus == IdentityVerificationStatus.PENDING_REVIEW
-            ) {
-                prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.VERIFIED)
-            }
+        prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.PENDING_REVIEW, "")
+
+        val cloudResult = firestoreAdminRepo?.submitVerificationRequest(
+            craftsmanName = session.fullName,
+            specialtyId = session.craftsmanSpecialtyId,
+            city = session.city,
+            nationalIdNumber = nationalIdNumber,
+            frontPhotoUri = finalFront,
+            backPhotoUri = finalBack,
+            selfiePhotoUri = finalSelfie
+        )
+        if (cloudResult != null && cloudResult.isFailure) {
+            return Result.failure(
+                cloudResult.exceptionOrNull() ?: IllegalStateException("تعذر إرسال طلب التوثيق إلى السحابة")
+            )
         }
-        return true
+        return Result.success(cloudImagesUploaded)
     }
 
     suspend fun resetCraftsmanIdentityVerification() {
         val session = prefs.userSessionFlow.first()
         if (session.role != UserRole.CRAFTSMAN) return
-        prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.NOT_SUBMITTED)
+        prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.NOT_SUBMITTED, "")
     }
+
+    suspend fun setProductionMode(enabled: Boolean): Result<Unit> =
+        firestoreAdminRepo?.setProductionMode(enabled)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
+
+    suspend fun reviewCraftsmanVerification(
+        craftsmanId: String,
+        approved: Boolean,
+        rejectionReason: String = ""
+    ): Result<Unit> =
+        firestoreAdminRepo?.reviewVerificationSubmission(craftsmanId, approved, rejectionReason)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
+
+    suspend fun toggleUserSuspended(
+        userId: String,
+        isCraftsman: Boolean,
+        suspended: Boolean
+    ): Result<Unit> =
+        firestoreAdminRepo?.toggleUserSuspended(userId, isCraftsman, suspended)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
+
+    suspend fun cancelRequestAsAdmin(requestId: String): Result<Unit> =
+        firestoreAdminRepo?.cancelRequestAsAdmin(requestId)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
+
+    suspend fun addAuthorizedAdmin(email: String): Result<Unit> =
+        firestoreAdminRepo?.addAuthorizedAdmin(email)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
+
+    suspend fun removeAuthorizedAdmin(email: String): Result<Unit> =
+        firestoreAdminRepo?.removeAuthorizedAdmin(email)
+            ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun createServiceRequest(
         categoryId: String,
@@ -457,12 +645,16 @@ class HirafiRepository(
         isUrgent: Boolean,
         photoUri: String?,
         preferredCraftsmanId: String? = null,
-        radiusKm: Int = 5
+        radiusKm: Int = 5,
+        productionMode: Boolean = false
     ): ServiceRequest {
         val session = prefs.userSessionFlow.first()
         val category = HirafiCategories.byId(categoryId)
         val now = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
+        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
+            cloudStorageService.uploadRequestPhoto(requestId, photoUri).getOrNull() ?: photoUri
+        } else photoUri
         val resolvedTitle = title.trim().let { if (it.length < 2) "طلب ${category.nameAr}" else it }
         val entity = ServiceRequestEntity(
             id = requestId,
@@ -486,7 +678,7 @@ class HirafiRepository(
             assignedCraftsmanName = null,
             assignedCraftsmanPhone = null,
             assignedCraftsmanRating = null,
-            photoUri = photoUri,
+            photoUri = uploadedPhotoUri,
             createdAtMillis = now,
             updatedAtMillis = now
         )
@@ -495,9 +687,9 @@ class HirafiRepository(
         firestoreMarketplaceRepo?.createServiceRequest(domain)
         pushRequestToSupabase(entity, session)
 
-        // Only simulate local sample offers when offline/unauthenticated OR tapping a seeded demo craftsman
+        // Only simulate local sample offers when NOT in productionMode and targeting offline/seeded craftsman
         val isSeededSampleTarget = preferredCraftsmanId != null && preferredCraftsmanId.startsWith("c_")
-        if (!isFirestoreAuthenticated || isSeededSampleTarget) {
+        if (!productionMode && (!isFirestoreAuthenticated || isSeededSampleTarget)) {
             simulateLiveIncomingOffers(
                 requestId = requestId,
                 categoryId = categoryId,

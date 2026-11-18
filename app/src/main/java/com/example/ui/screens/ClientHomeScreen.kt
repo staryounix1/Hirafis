@@ -137,6 +137,8 @@ fun ClientHomeScreen(
     val searchRadiusKm by viewModel.searchRadiusKm.collectAsStateWithLifecycle()
     val craftsmanSort by viewModel.craftsmanSort.collectAsStateWithLifecycle()
     val onlySelectedCategoryOnMap by viewModel.onlySelectedCategoryOnMap.collectAsStateWithLifecycle()
+    val onlyCloudCraftsmen by viewModel.onlyCloudCraftsmen.collectAsStateWithLifecycle()
+    val cloudCraftsmenCount by viewModel.cloudCraftsmenCount.collectAsStateWithLifecycle()
     val offerSort by viewModel.offerSort.collectAsStateWithLifecycle()
     val userGps by viewModel.userGpsLocation.collectAsStateWithLifecycle()
     val cameraTarget by viewModel.cameraTarget.collectAsStateWithLifecycle()
@@ -148,6 +150,8 @@ fun ClientHomeScreen(
     val placeResults by viewModel.placeSearchResults.collectAsStateWithLifecycle()
     val isSearchingPlaces by viewModel.isSearchingPlaces.collectAsStateWithLifecycle()
     val previewedPortfolio by viewModel.previewedCraftsmanPortfolio.collectAsStateWithLifecycle()
+    val runtimeConfig by viewModel.appRuntimeConfig.collectAsStateWithLifecycle()
+    val currentSession by viewModel.userSession.collectAsStateWithLifecycle()
 
     var showLocationPicker by remember { mutableStateOf(false) }
     var showCraftsmenSheet by remember { mutableStateOf(false) }
@@ -300,13 +304,46 @@ fun ClientHomeScreen(
                 }
             }
 
-            // GPS Locate Pill on Map
+            // GPS Locate Pill & Runtime Status Badges on Map
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (runtimeConfig.productionMode) {
+                        Surface(
+                            color = VerifiedEmerald,
+                            shape = RoundedCornerShape(99.dp),
+                            shadowElevation = 6.dp
+                        ) {
+                            Text(
+                                text = "الوضع الإنتاجي المباشر",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                    if (currentSession.isSuspended) {
+                        Surface(
+                            color = UrgentCoral,
+                            shape = RoundedCornerShape(99.dp),
+                            shadowElevation = 6.dp
+                        ) {
+                            Text(
+                                text = "الحساب معلق مؤقتاً",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
                 Surface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.surface,
@@ -536,8 +573,9 @@ fun ClientHomeScreen(
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Column {
+                                            val cloudSummary = if (cloudCraftsmenCount > 0) " • $cloudCraftsmenCount سحابي مباشر" else ""
                                             Text(
-                                                text = "متاح ${filteredCraftsmen.size} حرفيين ($radiusText)",
+                                                text = "متاح ${filteredCraftsmen.size} حرفيين ($radiusText)$cloudSummary",
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = ObsidianBlack,
@@ -1042,10 +1080,13 @@ fun ClientHomeScreen(
             searchRadiusKm = searchRadiusKm,
             selectedSort = craftsmanSort,
             onlySelectedCategory = onlySelectedCategoryOnMap,
+            onlyCloudCraftsmen = onlyCloudCraftsmen,
+            cloudCraftsmenCount = cloudCraftsmenCount,
             onSearchQueryChange = { viewModel.updateCraftsmanSearchQuery(it) },
             onSelectRadiusKm = { viewModel.setSearchRadiusKm(it) },
             onSelectSort = { viewModel.setCraftsmanSort(it) },
             onToggleOnlyCategory = { viewModel.toggleOnlyCategoryOnMap(it) },
+            onToggleOnlyCloudCraftsmen = { viewModel.toggleOnlyCloudCraftsmen(it) },
             onPreviewCraftsman = { pin ->
                 showCraftsmenSheet = false
                 viewModel.focusCraftsmanOnMap(pin)

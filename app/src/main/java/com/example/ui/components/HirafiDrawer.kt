@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
@@ -202,7 +203,11 @@ fun HirafiDrawerContent(
                 Spacer(Modifier.height(10.dp))
 
                 DrawerNavItem(
-                    label = if (session.role == UserRole.CRAFTSMAN) "الطلبات الواردة والخريطة" else "طلب خدمة (الخريطة)",
+                    label = when (session.role) {
+                        UserRole.ADMIN -> "لوحة تحكم الأدمين"
+                        UserRole.CRAFTSMAN -> "الطلبات الواردة والخريطة"
+                        UserRole.CLIENT -> "طلب خدمة (الخريطة)"
+                    },
                     icon = Icons.Rounded.Home,
                     selected = currentRoute == "home",
                     onClick = { onNavigate("home") }
@@ -215,18 +220,22 @@ fun HirafiDrawerContent(
                     onClick = { onNavigate("profile") },
                     testTag = "drawer_profile_item"
                 )
-                DrawerNavItem(
-                    label = "سجل الطلبات والضمانات",
-                    icon = Icons.Rounded.History,
-                    selected = currentRoute == "orders",
-                    onClick = { onNavigate("orders") }
-                )
+                if (session.role != UserRole.ADMIN) {
+                    DrawerNavItem(
+                        label = "سجل الطلبات والضمانات",
+                        icon = Icons.Rounded.History,
+                        selected = currentRoute == "orders",
+                        onClick = { onNavigate("orders") }
+                    )
+                }
                 if (AccountRolePolicy.canAccessIdentityVerification(session)) {
                     val (badgeLabel, badgeContainer, badgeTextColor) = when (session.verificationStatus) {
                         IdentityVerificationStatus.VERIFIED ->
                             Triple("موثّق ✓", VerifiedEmeraldSoft, VerifiedEmerald)
                         IdentityVerificationStatus.PENDING_REVIEW ->
                             Triple("قيد المراجعة", ElectricLimeSoft, ObsidianBlack)
+                        IdentityVerificationStatus.REJECTED ->
+                            Triple("مرفوض", UrgentCoralSoft, UrgentCoral)
                         IdentityVerificationStatus.NOT_SUBMITTED ->
                             Triple("مطلوب", UrgentCoralSoft, UrgentCoral)
                     }
@@ -278,21 +287,53 @@ fun HirafiDrawerContent(
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (session.role == UserRole.CRAFTSMAN)
-                                    "حساب حرفي دائم (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
-                                else
-                                    "حساب زبون دائم",
+                                text = when (session.role) {
+                                    UserRole.ADMIN -> "حساب أدمين رسمي"
+                                    UserRole.CRAFTSMAN -> "حساب حرفي دائم (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
+                                    UserRole.CLIENT -> "حساب زبون دائم"
+                                },
                                 color = ElectricLime,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = if (session.role == UserRole.CRAFTSMAN)
-                                    "حساب مقفل — مخصص لوضع الحرفي فقط"
-                                else
-                                    "حساب مقفل — مخصص لوضع الزبون فقط",
-                                color = Color(0xFFB5BFC9),
+                                text = when {
+                                    session.isSuspended -> "الحساب معلّق مؤقتاً من الإدارة"
+                                    session.role == UserRole.ADMIN -> "صلاحيات كاملة — إدارة المنصة والتوثيق"
+                                    session.role == UserRole.CRAFTSMAN -> "حساب مقفل — مخصص لوضع الحرفي فقط"
+                                    else -> "حساب مقفل — مخصص لوضع الزبون فقط"
+                                },
+                                color = if (session.isSuspended) UrgentCoral else Color(0xFFB5BFC9),
                                 fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                if (session.authProvider == "google") {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = VerifiedEmeraldSoft,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("firestore_connected_status_pill")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CloudDone,
+                                contentDescription = null,
+                                tint = VerifiedEmerald,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "متصل بقاعدة بيانات Firestore ✓",
+                                color = VerifiedEmerald,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
                             )
                         }
                     }

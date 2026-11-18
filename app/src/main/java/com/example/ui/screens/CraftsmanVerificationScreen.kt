@@ -98,6 +98,8 @@ import com.example.ui.theme.ElectricLime
 import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
+import com.example.ui.theme.UrgentCoral
+import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
 import com.example.ui.viewmodel.HirafiViewModel
@@ -182,7 +184,8 @@ fun CraftsmanVerificationScreen(
     val completedSteps = when (session.verificationStatus) {
         IdentityVerificationStatus.VERIFIED,
         IdentityVerificationStatus.PENDING_REVIEW -> 4
-        IdentityVerificationStatus.NOT_SUBMITTED -> IdentityVerificationValidator.completionStepsCount(
+        IdentityVerificationStatus.NOT_SUBMITTED,
+        IdentityVerificationStatus.REJECTED -> IdentityVerificationValidator.completionStepsCount(
             cin = cinInput,
             frontUri = frontUri,
             backUri = backUri,
@@ -221,6 +224,7 @@ fun CraftsmanVerificationScreen(
                         color = when (session.verificationStatus) {
                             IdentityVerificationStatus.VERIFIED -> VerifiedEmeraldSoft
                             IdentityVerificationStatus.PENDING_REVIEW -> ElectricLimeSoft
+                            IdentityVerificationStatus.REJECTED -> UrgentCoralSoft
                             IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.surfaceVariant
                         },
                         shape = RoundedCornerShape(99.dp),
@@ -235,12 +239,14 @@ fun CraftsmanVerificationScreen(
                                 imageVector = when (session.verificationStatus) {
                                     IdentityVerificationStatus.VERIFIED -> Icons.Rounded.Verified
                                     IdentityVerificationStatus.PENDING_REVIEW -> Icons.Rounded.HourglassTop
+                                    IdentityVerificationStatus.REJECTED,
                                     IdentityVerificationStatus.NOT_SUBMITTED -> Icons.Rounded.Shield
                                 },
                                 contentDescription = null,
                                 tint = when (session.verificationStatus) {
                                     IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
                                     IdentityVerificationStatus.PENDING_REVIEW -> ObsidianBlack
+                                    IdentityVerificationStatus.REJECTED -> UrgentCoral
                                     IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                                 modifier = Modifier.size(14.dp)
@@ -252,6 +258,7 @@ fun CraftsmanVerificationScreen(
                                 color = when (session.verificationStatus) {
                                     IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
                                     IdentityVerificationStatus.PENDING_REVIEW -> ObsidianBlack
+                                    IdentityVerificationStatus.REJECTED -> UrgentCoral
                                     IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.onSurfaceVariant
                                 }
                             )
@@ -294,7 +301,35 @@ fun CraftsmanVerificationScreen(
                     PendingVerificationTimelineCard()
                 }
 
-                IdentityVerificationStatus.NOT_SUBMITTED -> {
+                IdentityVerificationStatus.NOT_SUBMITTED,
+                IdentityVerificationStatus.REJECTED -> {
+                    if (session.verificationStatus == IdentityVerificationStatus.REJECTED) {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = UrgentCoralSoft,
+                            border = BorderStroke(1.dp, UrgentCoral),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "تم رفض ملف التوثيق السابق",
+                                    color = UrgentCoral,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = session.rejectionReason.ifBlank {
+                                        "يرجى التأكد من رقم البطاقة ووضوح الصور وإعادة الإرسال."
+                                    },
+                                    color = ObsidianBlack,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
                     VerificationStepCinCard(
                         cinValue = cinInput,
                         onCinChange = { raw ->
@@ -422,6 +457,7 @@ private fun VerificationHeroCard(
     val accent = when (session.verificationStatus) {
         IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
         IdentityVerificationStatus.PENDING_REVIEW -> ElectricLime
+        IdentityVerificationStatus.REJECTED -> UrgentCoral
         IdentityVerificationStatus.NOT_SUBMITTED -> ElectricLime
     }
 
@@ -509,9 +545,11 @@ private fun VerificationHeroCard(
                         IdentityVerificationStatus.VERIFIED ->
                             "هويتك موثّقة بالكامل! تظهر شارة الثقة بجانب عروضك وتزداد فرص قبول الزبائن لطلباتك."
                         IdentityVerificationStatus.PENDING_REVIEW ->
-                            "جاري التحقق الآلي من وضوح البطاقة الوطنية ومطابقة الصورة الشخصية..."
+                            "تم إرسال ملفك إلى السحابة وهو الآن بانتظار مراجعة واعتماد إدارة التطبيق."
+                        IdentityVerificationStatus.REJECTED ->
+                            "تحتاج وثائقك إلى تحديث: ${session.rejectionReason.ifBlank { "أعد رفع صور أوضح." }}"
                         IdentityVerificationStatus.NOT_SUBMITTED ->
-                            "وثّق هويتك في أقل من دقيقة للحصول على شارة الحرفي المعتمد وزيادة ثقة الزبائن."
+                            "وثّق هويتك للحصول على شارة الحرفي المعتمد وزيادة ثقة الزبائن."
                     },
                     color = Color(0xFFD6DDE6),
                     fontSize = 12.sp,
@@ -873,12 +911,12 @@ private fun PendingVerificationTimelineCard() {
                 modifier = Modifier.size(46.dp)
             )
             Text(
-                text = "جاري التحقق الفوري من وثائقك...",
+                text = "بانتظار مراجعة واعتماد الإدارة",
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 16.sp
             )
             Text(
-                text = "نطابق بيانات البطاقة الوطنية والصورة الشخصية تلقائياً، ثوانٍ قليلة وتظهر شارة التوثيق.",
+                text = "تم حفظ رقم بطاقتك وصورك في لوحة الإدارة، وستصلك إشعارات فورية فور اعتمادها.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = pulse)
             )
@@ -888,8 +926,8 @@ private fun PendingVerificationTimelineCard() {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 TimelineCheckRow("استلام رقم البطاقة الوطنية", completed = true)
-                TimelineCheckRow("التحقق من وضوح وجهي البطاقة", completed = true)
-                TimelineCheckRow("تفعيل شارة الحرفي المعتمد", completed = false)
+                TimelineCheckRow("رفع وحفظ الوثائق للمراجعة", completed = true)
+                TimelineCheckRow("مراجعة واعتماد فريق الأدمين", completed = false)
             }
         }
     }

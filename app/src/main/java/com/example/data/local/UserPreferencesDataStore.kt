@@ -43,6 +43,9 @@ class UserPreferencesDataStore(private val context: Context) {
         val ID_BACK_URI = stringPreferencesKey("craftsman_id_back_uri")
         val SELFIE_URI = stringPreferencesKey("craftsman_selfie_uri")
         val VERIFICATION_SUBMITTED_AT = longPreferencesKey("craftsman_verification_submitted_at")
+        val REJECTION_REASON = stringPreferencesKey("craftsman_rejection_reason")
+        val FCM_TOKEN = stringPreferencesKey("fcm_token")
+        val IS_SUSPENDED = booleanPreferencesKey("is_suspended")
         val SUPABASE_EMAIL = stringPreferencesKey("supabase_email")
         val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
     }
@@ -56,7 +59,7 @@ class UserPreferencesDataStore(private val context: Context) {
             email = prefs[Keys.EMAIL] ?: "",
             phone = prefs[Keys.PHONE] ?: "+212 612-345678",
             city = prefs[Keys.CITY] ?: "الدار البيضاء",
-            role = if (roleDb == UserRole.CRAFTSMAN.dbValue) UserRole.CRAFTSMAN else UserRole.CLIENT,
+            role = UserRole.fromDb(roleDb),
             isRoleLocked = prefs[Keys.ROLE_LOCKED] ?: false,
             craftsmanSpecialtyId = specId,
             isCraftsmanSpecialtyLocked = prefs[Keys.SPECIALTY_LOCKED] ?: false,
@@ -72,6 +75,9 @@ class UserPreferencesDataStore(private val context: Context) {
             idBackPhotoUri = prefs[Keys.ID_BACK_URI],
             selfiePhotoUri = prefs[Keys.SELFIE_URI],
             verificationSubmittedAtMillis = prefs[Keys.VERIFICATION_SUBMITTED_AT],
+            rejectionReason = prefs[Keys.REJECTION_REASON] ?: "",
+            fcmToken = prefs[Keys.FCM_TOKEN] ?: "",
+            isSuspended = prefs[Keys.IS_SUSPENDED] ?: false,
             supabaseEmail = prefs[Keys.SUPABASE_EMAIL],
             supabaseAccessToken = prefs[Keys.SUPABASE_ACCESS_TOKEN]
         )
@@ -102,12 +108,16 @@ class UserPreferencesDataStore(private val context: Context) {
         avatarUri: String? = null,
         bio: String? = null,
         experienceYears: Int? = null,
-        basePriceDh: Int? = null
+        basePriceDh: Int? = null,
+        verificationStatus: IdentityVerificationStatus? = null,
+        rejectionReason: String? = null,
+        isSuspended: Boolean? = null,
+        forceOverwrite: Boolean = false
     ): Boolean {
         var registered = false
         context.dataStore.edit { prefs ->
             val alreadyLocked = prefs[Keys.ROLE_LOCKED] ?: false
-            if (!alreadyLocked) {
+            if (!alreadyLocked || forceOverwrite) {
                 prefs[Keys.FULL_NAME] = fullName.trim()
                 if (email.isNotBlank()) prefs[Keys.EMAIL] = email.trim().lowercase()
                 if (phone.isNotBlank()) prefs[Keys.PHONE] = phone.trim()
@@ -115,10 +125,14 @@ class UserPreferencesDataStore(private val context: Context) {
                 prefs[Keys.ROLE] = role.dbValue
                 prefs[Keys.ROLE_LOCKED] = true
                 prefs[Keys.AUTH_PROVIDER] = authProvider
+                prefs[Keys.IS_ONLINE] = true
                 if (!avatarUri.isNullOrBlank()) prefs[Keys.AVATAR_URI] = avatarUri
                 if (!bio.isNullOrBlank()) prefs[Keys.BIO] = bio
                 if (experienceYears != null) prefs[Keys.EXPERIENCE_YEARS] = experienceYears
                 if (basePriceDh != null) prefs[Keys.BASE_PRICE_DH] = basePriceDh
+                if (verificationStatus != null) prefs[Keys.VERIFICATION_STATUS] = verificationStatus.dbValue
+                if (rejectionReason != null) prefs[Keys.REJECTION_REASON] = rejectionReason
+                if (isSuspended != null) prefs[Keys.IS_SUSPENDED] = isSuspended
                 if (!passwordHash.isNullOrBlank()) {
                     prefs[Keys.PASSWORD_HASH] = passwordHash
                 }
@@ -136,6 +150,8 @@ class UserPreferencesDataStore(private val context: Context) {
                     if (basePriceDh == null) {
                         prefs[Keys.BASE_PRICE_DH] = HirafiCategories.byId(specialtyId).defaultPriceDh
                     }
+                } else {
+                    prefs[Keys.SPECIALTY_LOCKED] = false
                 }
                 registered = true
             }
@@ -220,9 +236,25 @@ class UserPreferencesDataStore(private val context: Context) {
         }
     }
 
-    suspend fun updateIdentityVerificationStatus(status: IdentityVerificationStatus) {
+    suspend fun updateIdentityVerificationStatus(
+        status: IdentityVerificationStatus,
+        rejectionReason: String = ""
+    ) {
         context.dataStore.edit { prefs ->
             prefs[Keys.VERIFICATION_STATUS] = status.dbValue
+            prefs[Keys.REJECTION_REASON] = rejectionReason
+        }
+    }
+
+    suspend fun saveFcmToken(token: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.FCM_TOKEN] = token
+        }
+    }
+
+    suspend fun setSuspended(suspended: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.IS_SUSPENDED] = suspended
         }
     }
 

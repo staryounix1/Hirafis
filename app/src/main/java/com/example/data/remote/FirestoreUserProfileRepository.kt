@@ -3,6 +3,8 @@ package com.example.data.remote
 import android.content.Context
 import androidx.annotation.Keep
 import com.example.R
+import com.example.data.model.AdminAuthorizationPolicy
+import com.example.data.model.HirafiCategories
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
@@ -10,8 +12,14 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
 @Keep
@@ -29,6 +37,10 @@ data class FirestoreUserProfile(
     val bio: String = "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
     val experienceYears: Long = 5L,
     val basePriceDh: Long = 120L,
+    val fcmToken: String = "",
+    val verificationStatus: String = "not_submitted",
+    val rejectionReason: String = "",
+    val isSuspended: Boolean = false,
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 )
@@ -42,6 +54,65 @@ class FirestoreUserProfileRepository(
             context.applicationContext.getString(R.string.firestore_database_id)
         )
     )
+
+    fun observeMyProfile(): Flow<FirestoreUserProfile?> {
+        val uid = auth.currentUser?.uid ?: return emptyFlow()
+        val path = "users/$uid"
+        return db.collection("users").document(uid)
+            .snapshots()
+            .map { snap ->
+                if (snap.exists()) {
+                    snap.toObject(
+                        FirestoreUserProfile::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                } else null
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (firestoreError != null && auth.currentUser?.uid == uid) {
+                    handleFirestoreError(firestoreError, FirestoreOperationType.GET, path)
+                }
+            }
+    }
+
+    suspend fun fetchExistingProfileIfLocked(): Result<FirestoreUserProfile?> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("يجب تسجيل الدخول أولاً عبر غوغل"))
+        val docPath = "users/$uid"
+        return try {
+            val snap = db.collection("users").document(uid).get().await()
+            if (snap.exists()) {
+                val existing = snap.toObject(
+                    FirestoreUserProfile::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+                if (existing != null && existing.roleLocked) {
+                    return Result.success(existing)
+                }
+            }
+            Result.success(null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, FirestoreOperationType.GET, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun isEmailAuthorizedAdmin(email: String): Boolean {
+        val normalized = email.trim().lowercase()
+        if (normalized == AdminAuthorizationPolicy.BOOTSTRAP_ADMIN_EMAIL.lowercase()) return true
+        return try {
+            val snap = db.collection("authorized_admins").document(normalized).get().await()
+            snap.exists()
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     suspend fun syncOrRestoreProfile(
         fullName: String,
@@ -66,11 +137,25 @@ class FirestoreUserProfileRepository(
                 }
             }
 
+            val safeRole = when (chosenRole) {
+                "craftsman" -> "craftsman"
+                "admin" -> "admin"
+                else -> "client"
+            }
+
+            val cleanEmail = email.trim().lowercase().let { if (it.length < 3) "user@hirafi.app" else it }.take(120)
+            if (safeRole == "admin" && !isEmailAuthorizedAdmin(cleanEmail)) {
+                return Result.failure(
+                    IllegalStateException(
+                        "هذا الحساب ($cleanEmail) غير مصرح له كأدمين. يرجى الدخول ببريد الإدارة أو إضافته من لوحة الأدمين."
+                    )
+                )
+            }
+
             val cleanName = fullName.trim().let { if (it.length < 2) "مستخدم حرفي" else it }.take(80)
-            val cleanEmail = email.trim().let { if (it.length < 3) "user@hirafi.app" else it }.take(120)
             val cleanCity = city.trim().let { if (it.length < 2) "الدار البيضاء" else it }.take(60)
-            val safeRole = if (chosenRole == "craftsman") "craftsman" else "client"
             val safeSpec = chosenSpecialtyId.trim().let { if (it.length < 2) "plumbing" else it }.take(40)
+            val defaultBasePrice = HirafiCategories.byId(safeSpec).defaultPriceDh
 
             val payload = mapOf(
                 "userId" to uid,
@@ -83,7 +168,10 @@ class FirestoreUserProfileRepository(
                 "specialtyId" to safeSpec,
                 "bio" to "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
                 "experienceYears" to 5,
-                "basePriceDh" to 120,
+                "basePriceDh" to defaultBasePrice,
+                "verificationStatus" to "not_submitted",
+                "rejectionReason" to "",
+                "isSuspended" to false,
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -97,7 +185,10 @@ class FirestoreUserProfileRepository(
                     city = cleanCity,
                     role = safeRole,
                     roleLocked = true,
-                    specialtyId = safeSpec
+                    specialtyId = safeSpec,
+                    basePriceDh = defaultBasePrice.toLong(),
+                    verificationStatus = "not_submitted",
+                    isSuspended = false
                 )
             )
         } catch (e: CancellationException) {
@@ -138,6 +229,27 @@ class FirestoreUserProfileRepository(
                 updates["avatarUri"] = cleanAvatar
             }
             db.collection("users").document(uid).update(updates).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, FirestoreOperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateFcmToken(token: String): Result<Unit> {
+        val uid = auth.currentUser?.uid ?: return Result.success(Unit)
+        val clean = token.trim().take(500)
+        if (clean.isBlank()) return Result.success(Unit)
+        val docPath = "users/$uid"
+        return try {
+            db.collection("users").document(uid).update(
+                mapOf(
+                    "fcmToken" to clean,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

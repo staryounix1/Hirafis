@@ -164,9 +164,11 @@ class FirestoreMarketplaceRepository(
             .whereEqualTo("online", true)
             .snapshots()
             .map { snapshot ->
-                snapshot.documents.mapNotNull { doc ->
-                    doc.toCraftsmanPin(centerLat, centerLng)
-                }
+                snapshot.documents
+                    .filter { it.getBoolean("isSuspended") != true }
+                    .mapNotNull { doc ->
+                        doc.toCraftsmanPin(centerLat, centerLng)
+                    }
             }
             .catch { error -> handleFlowError(error, FirestoreOperationType.LIST, path, uid) }
     }
@@ -559,7 +561,9 @@ class FirestoreMarketplaceRepository(
                     "basePriceDh" to session.basePriceDh.coerceIn(40, 5000),
                     "lat" to lat.coerceIn(-90.0, 90.0),
                     "lng" to lng.coerceIn(-180.0, 180.0),
-                    "online" to session.isCraftsmanOnline,
+                    "online" to (session.isCraftsmanOnline && !session.isSuspended),
+                    "isVerified" to session.isCraftsmanVerified,
+                    "isSuspended" to session.isSuspended,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -759,11 +763,12 @@ class FirestoreMarketplaceRepository(
             distanceKm = dist,
             etaMinutes = eta,
             phone = "",
-            isVerified = true,
+            isVerified = getBoolean("isVerified") ?: false,
             experienceYears = (get("experienceYears") as? Number)?.toInt() ?: 5,
             bio = getString("bio") ?: "حرفي معتمد على شبكة حرفي",
             avatarUri = getString("avatarUri"),
-            isLiveCloud = true
+            isLiveCloud = true,
+            city = getString("city") ?: ""
         )
     }
 

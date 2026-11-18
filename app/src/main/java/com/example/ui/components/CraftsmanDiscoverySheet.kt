@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material.icons.rounded.PersonSearch
@@ -87,10 +88,13 @@ fun NearbyCraftsmenSearchSheet(
     searchRadiusKm: Int,
     selectedSort: CraftsmanSortOption,
     onlySelectedCategory: Boolean,
+    onlyCloudCraftsmen: Boolean = false,
+    cloudCraftsmenCount: Int = 0,
     onSearchQueryChange: (String) -> Unit,
     onSelectRadiusKm: (Int) -> Unit,
     onSelectSort: (CraftsmanSortOption) -> Unit,
     onToggleOnlyCategory: (Boolean) -> Unit,
+    onToggleOnlyCloudCraftsmen: (Boolean) -> Unit = {},
     onPreviewCraftsman: (CraftsmanPin) -> Unit,
     onDirectRequestCraftsman: (CraftsmanPin) -> Unit,
     onDismiss: () -> Unit
@@ -144,9 +148,14 @@ fun NearbyCraftsmenSearchSheet(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "تصفية حسب المسافة، التقييم، والتخصص المطلوب",
+                            text = if (cloudCraftsmenCount > 0) {
+                                "يشمل $cloudCraftsmenCount حرفياً مسجلاً سحابياً في قاعدة البيانات"
+                            } else {
+                                "تصفية حسب المسافة، التقييم، والتخصص المطلوب"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (cloudCraftsmenCount > 0) VerifiedEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (cloudCraftsmenCount > 0) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                 }
@@ -228,6 +237,33 @@ fun NearbyCraftsmenSearchSheet(
                         modifier = Modifier.testTag("only_category_filter_chip")
                     )
                 }
+
+                item {
+                    FilterChip(
+                        selected = onlyCloudCraftsmen,
+                        onClick = { onToggleOnlyCloudCraftsmen(!onlyCloudCraftsmen) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.CloudDone,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = "المسجلون سحابياً فقط ($cloudCraftsmenCount)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = VerifiedEmerald,
+                            selectedLabelColor = Color.White,
+                            selectedLeadingIconColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("only_cloud_craftsmen_chip")
+                    )
+                }
             }
 
             // Sort options
@@ -294,6 +330,7 @@ fun NearbyCraftsmenSearchSheet(
                         onClick = {
                             onSearchQueryChange("")
                             onToggleOnlyCategory(false)
+                            onToggleOnlyCloudCraftsmen(false)
                             onSelectRadiusKm(20)
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -447,6 +484,15 @@ private fun CraftsmanDiscoveryCard(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            if (pin.city.isNotBlank()) {
+                                Text(
+                                    text = "• ${pin.city}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -564,17 +610,50 @@ fun CraftsmanDetailDialog(
                             )
                         }
                     }
-                    Surface(
-                        color = category.accentColor.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(8.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = pin.specialtyName,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = category.accentColor,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
+                        Surface(
+                            color = category.accentColor.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = pin.specialtyName,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = category.accentColor,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                        if (pin.city.isNotBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = pin.city,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        if (pin.isLiveCloud) {
+                            Surface(
+                                color = VerifiedEmeraldSoft,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "حساب سحابي",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = VerifiedEmerald,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -10,6 +10,19 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isBootstrapAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email_verified == true &&
+             request.auth.token.email == 'youness065220@gmail.com';
+    }
+
+    function isAuthorizedAdmin() {
+      return isBootstrapAdmin() ||
+             (isSignedIn() &&
+              request.auth.token.email_verified == true &&
+              exists(/databases/$(database)/documents/authorized_admins/$(request.auth.token.email)));
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -27,7 +40,7 @@ service cloud.firestore {
              data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 80 &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.city is string && data.city.size() >= 2 && data.city.size() <= 60 &&
-             data.role in ['client', 'craftsman'] &&
+             data.role in ['client', 'craftsman', 'admin'] &&
              data.roleLocked is bool &&
              data.specialtyId is string && data.specialtyId.size() >= 2 && data.specialtyId.size() <= 40 &&
              (!('phone' in data) || (data.phone is string && data.phone.size() >= 6 && data.phone.size() <= 30)) &&
@@ -35,6 +48,10 @@ service cloud.firestore {
              (!('bio' in data) || (data.bio is string && data.bio.size() <= 400)) &&
              (!('experienceYears' in data) || (data.experienceYears is int && data.experienceYears >= 0 && data.experienceYears <= 60)) &&
              (!('basePriceDh' in data) || (data.basePriceDh is int && data.basePriceDh >= 40 && data.basePriceDh <= 5000)) &&
+             (!('fcmToken' in data) || (data.fcmToken is string && data.fcmToken.size() <= 500)) &&
+             (!('verificationStatus' in data) || data.verificationStatus in ['not_submitted', 'pending_review', 'verified', 'rejected']) &&
+             (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 300)) &&
+             (!('isSuspended' in data) || data.isSuspended is bool) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -53,6 +70,8 @@ service cloud.firestore {
              data.lat is number && data.lat >= -90.0 && data.lat <= 90.0 &&
              data.lng is number && data.lng >= -180.0 && data.lng <= 180.0 &&
              data.online is bool &&
+             (!('isVerified' in data) || data.isVerified is bool) &&
+             (!('isSuspended' in data) || data.isSuspended is bool) &&
              (!('avatarUri' in data) || (data.avatarUri is string && data.avatarUri.size() <= 500)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
@@ -65,6 +84,22 @@ service cloud.firestore {
              data.categoryName is string && data.categoryName.size() >= 2 && data.categoryName.size() <= 60 &&
              (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidVerificationSubmission(data) {
+      return data.craftsmanId is string && data.craftsmanId.size() >= 1 && data.craftsmanId.size() <= 128 &&
+             data.craftsmanName is string && data.craftsmanName.size() >= 2 && data.craftsmanName.size() <= 80 &&
+             data.specialtyId is string && data.specialtyId.size() >= 2 && data.specialtyId.size() <= 40 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 60 &&
+             data.nationalIdNumber is string && data.nationalIdNumber.size() >= 4 && data.nationalIdNumber.size() <= 20 &&
+             data.frontPhotoUri is string && data.frontPhotoUri.size() <= 500 &&
+             data.backPhotoUri is string && data.backPhotoUri.size() <= 500 &&
+             data.selfiePhotoUri is string && data.selfiePhotoUri.size() <= 500 &&
+             data.status in ['pending_review', 'verified', 'rejected'] &&
+             (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 300)) &&
+             (!('reviewedByEmail' in data) || (data.reviewedByEmail is string && data.reviewedByEmail.size() <= 120)) &&
+             data.submittedAt is timestamp && data.submittedAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -119,7 +154,7 @@ service cloud.firestore {
              data.memberUids[0] is string &&
              data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
-             data.senderRole in ['client', 'craftsman'] &&
+             data.senderRole in ['client', 'craftsman', 'admin'] &&
              data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
@@ -134,13 +169,44 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
+    match /authorized_admins/{adminEmail} {
+      allow get: if isAuthorizedAdmin() ||
+                    (isSignedIn() &&
+                     request.auth.token.email_verified == true &&
+                     request.auth.token.email == adminEmail);
+      allow list: if isAuthorizedAdmin();
+      allow create, update: if isAuthorizedAdmin() &&
+                               adminEmail is string &&
+                               adminEmail.size() >= 3 &&
+                               adminEmail.size() <= 120 &&
+                               incoming().email == adminEmail &&
+                               incoming().addedBy is string &&
+                               incoming().createdAt is timestamp &&
+                               incoming().createdAt <= request.time;
+      allow delete: if isAuthorizedAdmin() && adminEmail != 'youness065220@gmail.com';
+    }
+
+    match /app_config/{configId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isAuthorizedAdmin() &&
+                               configId == 'runtime' &&
+                               incoming().productionMode is bool &&
+                               incoming().updatedByEmail is string &&
+                               incoming().updatedAt is timestamp &&
+                               incoming().updatedAt <= request.time;
+      allow delete: if false;
+    }
+
     match /users/{userId} {
-      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow get, list: if (isSignedIn() && request.auth.uid == userId) || isAuthorizedAdmin();
 
       allow create: if isSignedIn() &&
                        isValidId(userId) &&
                        request.auth.uid == userId &&
                        incoming().userId == request.auth.uid &&
+                       (incoming().role != 'admin' || isAuthorizedAdmin()) &&
+                       (!('verificationStatus' in incoming()) || incoming().verificationStatus == 'not_submitted') &&
+                       (!('isSuspended' in incoming()) || incoming().isSuspended == false) &&
                        incoming().keys().hasAll([
                          'userId', 'fullName', 'email', 'city',
                          'role', 'roleLocked', 'specialtyId', 'createdAt', 'updatedAt'
@@ -149,37 +215,52 @@ service cloud.firestore {
                          'userId', 'fullName', 'email', 'phone', 'city',
                          'role', 'roleLocked', 'specialtyId',
                          'avatarUri', 'bio', 'experienceYears', 'basePriceDh',
+                         'fcmToken', 'verificationStatus', 'rejectionReason', 'isSuspended',
                          'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserProfile(incoming());
 
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
-                       request.auth.uid == userId &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
-                       (!existing().roleLocked || (
-                         incoming().role == existing().role &&
-                         incoming().roleLocked == true &&
-                         (existing().role != 'craftsman' || incoming().specialtyId == existing().specialtyId)
-                       )) &&
                        isValidUserProfile(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'fullName', 'email', 'phone', 'city',
-                         'role', 'roleLocked', 'specialtyId',
-                         'avatarUri', 'bio', 'experienceYears', 'basePriceDh',
-                         'updatedAt'
-                       ]);
+                       (
+                         (
+                           request.auth.uid == userId &&
+                           (!existing().roleLocked || (
+                             incoming().role == existing().role &&
+                             incoming().roleLocked == true &&
+                             (existing().role != 'craftsman' || incoming().specialtyId == existing().specialtyId)
+                           )) &&
+                           (incoming().role != 'admin' || isAuthorizedAdmin()) &&
+                           (!('isSuspended' in incoming()) || incoming().isSuspended == (('isSuspended' in existing()) ? existing().isSuspended : false)) &&
+                           (!('verificationStatus' in incoming()) || incoming().verificationStatus in ['not_submitted', 'pending_review']) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'fullName', 'email', 'phone', 'city',
+                             'role', 'roleLocked', 'specialtyId',
+                             'avatarUri', 'bio', 'experienceYears', 'basePriceDh',
+                             'fcmToken', 'verificationStatus', 'rejectionReason',
+                             'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           isAuthorizedAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'verificationStatus', 'rejectionReason', 'isSuspended', 'updatedAt'
+                           ])
+                         )
+                       );
 
       allow delete: if false;
     }
 
     match /craftsmen_directory/{craftsmanId} {
       allow get: if isSignedIn() && isValidId(craftsmanId) &&
-                    (existing().online == true || existing().craftsmanId == request.auth.uid);
+                    (existing().online == true || existing().craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
       allow list: if isSignedIn() &&
-                     (resource.data.online == true || resource.data.craftsmanId == request.auth.uid);
+                     (resource.data.online == true || resource.data.craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(craftsmanId) &&
@@ -193,21 +274,31 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'craftsmanId', 'displayName', 'specialtyId', 'specialtyName', 'city',
                          'bio', 'experienceYears', 'rating', 'completedJobs', 'basePriceDh',
-                         'lat', 'lng', 'online', 'avatarUri', 'createdAt', 'updatedAt'
+                         'lat', 'lng', 'online', 'isVerified', 'isSuspended', 'avatarUri', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidCraftsmanPublic(incoming());
 
       allow update: if isSignedIn() &&
                        isValidId(craftsmanId) &&
-                       request.auth.uid == craftsmanId &&
                        incoming().craftsmanId == existing().craftsmanId &&
                        incoming().specialtyId == existing().specialtyId &&
                        incoming().createdAt == existing().createdAt &&
                        isValidCraftsmanPublic(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'displayName', 'city', 'bio', 'experienceYears',
-                         'basePriceDh', 'lat', 'lng', 'online', 'avatarUri', 'updatedAt'
-                       ]);
+                       (
+                         (
+                           request.auth.uid == craftsmanId &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayName', 'city', 'bio', 'experienceYears',
+                             'basePriceDh', 'lat', 'lng', 'online', 'avatarUri', 'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           isAuthorizedAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'isVerified', 'online', 'isSuspended', 'updatedAt'
+                           ])
+                         )
+                       );
 
       allow delete: if false;
 
@@ -236,20 +327,69 @@ service cloud.firestore {
         allow delete: if isSignedIn() &&
                          isValidId(craftsmanId) &&
                          isValidId(itemId) &&
-                         request.auth.uid == craftsmanId;
+                         (request.auth.uid == craftsmanId || isAuthorizedAdmin());
       }
+    }
+
+    match /verification_submissions/{craftsmanId} {
+      allow get: if (isSignedIn() && isValidId(craftsmanId) && request.auth.uid == craftsmanId) || isAuthorizedAdmin();
+      allow list: if isAuthorizedAdmin() || (isSignedIn() && resource.data.craftsmanId == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(craftsmanId) &&
+                       request.auth.uid == craftsmanId &&
+                       incoming().craftsmanId == request.auth.uid &&
+                       incoming().status == 'pending_review' &&
+                       incoming().keys().hasAll([
+                         'craftsmanId', 'craftsmanName', 'specialtyId', 'city',
+                         'nationalIdNumber', 'frontPhotoUri', 'backPhotoUri', 'selfiePhotoUri',
+                         'status', 'submittedAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'craftsmanId', 'craftsmanName', 'specialtyId', 'city',
+                         'nationalIdNumber', 'frontPhotoUri', 'backPhotoUri', 'selfiePhotoUri',
+                         'status', 'rejectionReason', 'reviewedByEmail', 'submittedAt', 'updatedAt'
+                       ]) &&
+                       isValidVerificationSubmission(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(craftsmanId) &&
+                       incoming().craftsmanId == existing().craftsmanId &&
+                       isValidVerificationSubmission(incoming()) &&
+                       (
+                         (
+                           request.auth.uid == craftsmanId &&
+                           incoming().status == 'pending_review' &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'craftsmanName', 'specialtyId', 'city',
+                             'nationalIdNumber', 'frontPhotoUri', 'backPhotoUri', 'selfiePhotoUri',
+                             'status', 'rejectionReason', 'submittedAt', 'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           isAuthorizedAdmin() &&
+                           incoming().status in ['pending_review', 'verified', 'rejected'] &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'status', 'rejectionReason', 'reviewedByEmail', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if false;
     }
 
     match /service_requests/{requestId} {
       allow get: if isSignedIn() && isValidId(requestId) &&
                     (existing().clientId == request.auth.uid ||
                      existing().assignedCraftsmanId == request.auth.uid ||
-                     existing().status == 'searching');
+                     existing().status == 'searching' ||
+                     isAuthorizedAdmin());
 
       allow list: if isSignedIn() &&
                      (resource.data.clientId == request.auth.uid ||
                       resource.data.assignedCraftsmanId == request.auth.uid ||
-                      resource.data.status == 'searching');
+                      resource.data.status == 'searching' ||
+                      isAuthorizedAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(requestId) &&
@@ -279,19 +419,16 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        !(existing().status in ['completed', 'cancelled']) &&
                        (
-                         // Action 1: Client boosts proposed price while searching
                          (existing().clientId == request.auth.uid &&
                           existing().status == 'searching' &&
                           incoming().status == 'searching' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['proposedPrice', 'updatedAt'])) ||
 
-                         // Action 2: Client cancels active/searching request
                          (existing().clientId == request.auth.uid &&
                           existing().status in ['searching', 'accepted', 'en_route', 'arrived'] &&
                           incoming().status == 'cancelled' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
 
-                         // Action 3: Client accepts an offer -> transitions searching -> accepted
                          (existing().clientId == request.auth.uid &&
                           existing().status == 'searching' &&
                           incoming().status == 'accepted' &&
@@ -301,7 +438,6 @@ service cloud.firestore {
                             'assignedCraftsmanRating', 'updatedAt'
                           ])) ||
 
-                         // Action 4: Craftsman directly accepts a searching request at client proposed price
                          (existing().status == 'searching' &&
                           incoming().status == 'accepted' &&
                           incoming().assignedCraftsmanId == request.auth.uid &&
@@ -312,15 +448,17 @@ service cloud.firestore {
                             'assignedCraftsmanRating', 'updatedAt'
                           ])) ||
 
-                         // Action 5: Assigned craftsman publishes real-time GPS coordinates
                          (existing().assignedCraftsmanId == request.auth.uid &&
                           existing().status in ['accepted', 'en_route', 'arrived', 'in_progress'] &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['craftsmanLat', 'craftsmanLng', 'updatedAt'])) ||
 
-                         // Action 6: Participating client or assigned craftsman advances job workflow status
                          ((existing().clientId == request.auth.uid || existing().assignedCraftsmanId == request.auth.uid) &&
                           existing().status in ['accepted', 'en_route', 'arrived', 'in_progress'] &&
                           incoming().status in ['en_route', 'arrived', 'in_progress', 'completed', 'cancelled'] &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+
+                         (isAuthorizedAdmin() &&
+                          incoming().status == 'cancelled' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
                        );
 
@@ -328,10 +466,10 @@ service cloud.firestore {
 
       match /offers/{offerId} {
         allow get: if isSignedIn() && isValidId(requestId) && isValidId(offerId) &&
-                      (existing().clientId == request.auth.uid || existing().craftsmanId == request.auth.uid);
+                      (existing().clientId == request.auth.uid || existing().craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
         allow list: if isSignedIn() &&
-                       (resource.data.clientId == request.auth.uid || resource.data.craftsmanId == request.auth.uid);
+                       (resource.data.clientId == request.auth.uid || resource.data.craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
         allow create: if isSignedIn() &&
                          isValidId(requestId) &&
@@ -415,10 +553,10 @@ service cloud.firestore {
 
     match /reviews/{reviewId} {
       allow get: if isSignedIn() && isValidId(reviewId) &&
-                    (existing().clientId == request.auth.uid || existing().craftsmanId == request.auth.uid);
+                    (existing().clientId == request.auth.uid || existing().craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
       allow list: if isSignedIn() &&
-                     (resource.data.clientId == request.auth.uid || resource.data.craftsmanId == request.auth.uid);
+                     (resource.data.clientId == request.auth.uid || resource.data.craftsmanId == request.auth.uid || isAuthorizedAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(reviewId) &&

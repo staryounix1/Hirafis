@@ -15,7 +15,13 @@ import java.security.MessageDigest
 
 enum class UserRole(val dbValue: String, val labelAr: String) {
     CLIENT("client", "زبون"),
-    CRAFTSMAN("craftsman", "حرفي")
+    CRAFTSMAN("craftsman", "حرفي"),
+    ADMIN("admin", "أدمين");
+
+    companion object {
+        fun fromDb(value: String?): UserRole =
+            entries.firstOrNull { it.dbValue == value } ?: CLIENT
+    }
 }
 
 enum class PaymentMethod(val dbValue: String, val labelAr: String) {
@@ -117,7 +123,8 @@ data class CraftsmanPin(
     val bio: String = "حرفي معتمد ومجهز بأحدث الأدوات الاحترافية",
     val avatarUri: String? = null,
     val portfolio: List<PortfolioItem> = emptyList(),
-    val isLiveCloud: Boolean = false
+    val isLiveCloud: Boolean = false,
+    val city: String = ""
 )
 
 data class LiveRouteState(
@@ -195,8 +202,9 @@ data class ReviewRecord(
 
 enum class IdentityVerificationStatus(val dbValue: String, val labelAr: String) {
     NOT_SUBMITTED("not_submitted", "غير موثّق بعد"),
-    PENDING_REVIEW("pending_review", "قيد المراجعة السريعة"),
-    VERIFIED("verified", "هوية موثّقة");
+    PENDING_REVIEW("pending_review", "قيد المراجعة الإدارية"),
+    VERIFIED("verified", "هوية موثّقة"),
+    REJECTED("rejected", "مرفوض — يرجى التحديث");
 
     companion object {
         fun fromDb(value: String?): IdentityVerificationStatus =
@@ -293,6 +301,9 @@ data class UserSession(
     val idBackPhotoUri: String? = null,
     val selfiePhotoUri: String? = null,
     val verificationSubmittedAtMillis: Long? = null,
+    val rejectionReason: String = "",
+    val fcmToken: String = "",
+    val isSuspended: Boolean = false,
     val supabaseEmail: String? = null,
     val supabaseAccessToken: String? = null
 ) {
@@ -301,6 +312,9 @@ data class UserSession(
 
     val isCraftsmanVerified: Boolean
         get() = role == UserRole.CRAFTSMAN && verificationStatus == IdentityVerificationStatus.VERIFIED
+
+    val isAdmin: Boolean
+        get() = role == UserRole.ADMIN
 }
 
 object AccountRolePolicy {
@@ -317,7 +331,56 @@ object AccountRolePolicy {
     fun canAccessIdentityVerification(session: UserSession): Boolean {
         return session.isRoleLocked && session.role == UserRole.CRAFTSMAN
     }
+
+    fun canAccessAdminDashboard(session: UserSession): Boolean {
+        return session.isRoleLocked && session.role == UserRole.ADMIN
+    }
 }
+
+object AdminAuthorizationPolicy {
+    const val BOOTSTRAP_ADMIN_EMAIL = "youness065220@gmail.com"
+}
+
+data class AppRuntimeConfig(
+    val productionMode: Boolean = false,
+    val updatedByEmail: String = "",
+    val updatedAtMillis: Long = 0L
+)
+
+data class AuthorizedAdminRecord(
+    val email: String,
+    val addedBy: String,
+    val createdAtMillis: Long
+)
+
+data class VerificationSubmission(
+    val craftsmanId: String,
+    val craftsmanName: String,
+    val specialtyId: String,
+    val city: String,
+    val nationalIdNumber: String,
+    val frontPhotoUri: String,
+    val backPhotoUri: String,
+    val selfiePhotoUri: String,
+    val status: IdentityVerificationStatus,
+    val rejectionReason: String = "",
+    val reviewedByEmail: String = "",
+    val submittedAtMillis: Long = 0L,
+    val updatedAtMillis: Long = 0L
+)
+
+data class AdminUserRecord(
+    val userId: String,
+    val fullName: String,
+    val email: String,
+    val city: String,
+    val role: UserRole,
+    val specialtyId: String,
+    val verificationStatus: IdentityVerificationStatus,
+    val isSuspended: Boolean,
+    val fcmTokenPresent: Boolean,
+    val createdAtMillis: Long
+)
 
 data class CityCoord(
     val nameAr: String,

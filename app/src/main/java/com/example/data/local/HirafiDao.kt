@@ -65,4 +65,7 @@ interface HirafiDao {
 
     @Query("DELETE FROM portfolio_items WHERE id = :itemId")
     suspend fun deletePortfolioItem(itemId: String)
+
+    @Query("DELETE FROM service_requests WHERE id LIKE 'req_seed_%'")
+    suspend fun clearSeededRequests()
 }

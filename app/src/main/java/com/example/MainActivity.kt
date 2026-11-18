@@ -1,10 +1,14 @@
 package com.example
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import com.mapbox.common.MapboxOptions
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,8 +34,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,11 +61,15 @@ import com.example.data.local.UserPreferencesDataStore
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.UserRole
+import com.example.data.remote.FirebaseCloudStorageService
+import com.example.data.remote.FirestoreAdminRepository
 import com.example.data.remote.FirestoreMarketplaceRepository
 import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.repository.HirafiRepository
+import com.example.notifications.HirafiNotificationHelper
 import com.example.ui.auth.GoogleAuthHelper
 import com.example.ui.components.HirafiDrawerContent
+import com.example.ui.screens.AdminDashboardScreen
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.ClientHomeScreen
 import com.example.ui.screens.CraftsmanDashboardScreen
@@ -72,6 +82,9 @@ import com.example.ui.theme.HirafiTheme
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -84,11 +97,22 @@ class MainActivity : ComponentActivity() {
             MapboxOptions.accessToken = mapboxToken
         }
 
+        HirafiNotificationHelper.ensureChannels(applicationContext)
+
         val db = HirafiDatabase.getInstance(applicationContext)
         val prefs = UserPreferencesDataStore(applicationContext)
         val firestoreUserRepo = FirestoreUserProfileRepository(applicationContext)
         val firestoreMarketplaceRepo = FirestoreMarketplaceRepository(applicationContext)
-        val repository = HirafiRepository(db.hirafiDao(), prefs, firestoreUserRepo, firestoreMarketplaceRepo)
+        val firestoreAdminRepo = FirestoreAdminRepository(applicationContext)
+        val cloudStorageService = FirebaseCloudStorageService(applicationContext)
+        val repository = HirafiRepository(
+            dao = db.hirafiDao(),
+            prefs = prefs,
+            firestoreUserRepo = firestoreUserRepo,
+            firestoreMarketplaceRepo = firestoreMarketplaceRepo,
+            firestoreAdminRepo = firestoreAdminRepo,
+            cloudStorageService = cloudStorageService
+        )
 
         setContent {
             HirafiTheme {
@@ -103,15 +127,25 @@ fun HirafiAppRoot(repository: HirafiRepository) {
     val context = LocalContext.current
     val locationService = remember(context) { RealTimeLocationService(context.applicationContext) }
     val viewModel: HirafiViewModel = viewModel(
-        factory = HirafiViewModel.factory(repository, locationService)
+        factory = HirafiViewModel.factory(repository, locationService, context.applicationContext)
     )
     val biddingViewModel: RealtimeBiddingViewModel = viewModel(
         factory = RealtimeBiddingViewModel.factory(repository)
     )
 
     val session by viewModel.userSession.collectAsStateWithLifecycle()
+    val authUiState by viewModel.authUiState.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val biddingEvent by biddingViewModel.statusEvent.collectAsStateWithLifecycle()
+
+    var firebaseUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    DisposableEffect(Unit) {
+        val listener = FirebaseAuth.AuthStateListener { auth ->
+            firebaseUser = auth.currentUser
+        }
+        Firebase.auth.addAuthStateListener(listener)
+        onDispose { Firebase.auth.removeAuthStateListener(listener) }
+    }
 
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -120,6 +154,20 @@ fun HirafiAppRoot(repository: HirafiRepository) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
     var showCityDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.clearLegacyLocalSessionIfNeeded()
+        val credManager = CredentialManager.create(context)
+        GoogleAuthHelper.attemptAutoSignIn(
+            context = context,
+            credentialManager = credManager,
+            scope = scope,
+            onAuthSuccess = { account ->
+                viewModel.restoreExistingGoogleProfile(account.uid, account.email)
+            },
+            onUnauthenticated = {}
+        )
+    }
 
     LaunchedEffect(snackbarMessage) {
         val msg = snackbarMessage ?: return@LaunchedEffect
@@ -133,9 +181,30 @@ fun HirafiAppRoot(repository: HirafiRepository) {
         biddingViewModel.consumeStatusEvent()
     }
 
+    val isCloudSessionReady = firebaseUser != null &&
+        session.isRoleLocked &&
+        session.authProvider == "google" &&
+        session.userId == firebaseUser?.uid
+
+    var askedNotificationPermission by remember { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { }
+
+    LaunchedEffect(isCloudSessionReady) {
+        if (isCloudSessionReady &&
+            !askedNotificationPermission &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !HirafiNotificationHelper.hasNotificationPermission(context)
+        ) {
+            askedNotificationPermission = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = session.isRoleLocked && drawerState.isOpen,
+        gesturesEnabled = isCloudSessionReady && drawerState.isOpen,
         drawerContent = {
             HirafiDrawerContent(
                 session = session,
@@ -170,53 +239,65 @@ fun HirafiAppRoot(repository: HirafiRepository) {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             modifier = Modifier.fillMaxSize()
         ) { _ ->
-            if (!session.isRoleLocked) {
+            if (!isCloudSessionReady) {
                 RoleRegistrationScreen(
                     initialSession = session,
-                    onRegisterWithEmail = { fullName, email, password, city, role, specialtyId ->
-                        viewModel.registerFirstTimeAccount(
-                            fullName = fullName,
-                            email = email,
-                            password = password,
-                            city = city,
-                            role = role,
-                            specialtyId = specialtyId
-                        )
-                    },
-                    onGoogleAuthSuccess = { account, city, role, specialtyId ->
+                    isCloudSaving = authUiState.isLoading,
+                    currentFirebaseUid = firebaseUser?.uid,
+                    currentFirebaseEmail = firebaseUser?.email,
+                    currentFirebaseDisplayName = firebaseUser?.displayName,
+                    onGoogleAuthSuccess = { account, preferredDisplayName, city, role, specialtyId ->
                         viewModel.completeGoogleSignIn(
                             uid = account.uid,
                             displayName = account.displayName,
+                            preferredDisplayName = preferredDisplayName,
                             email = account.email,
                             city = city,
                             preferredRole = role,
                             preferredSpecialtyId = specialtyId
                         )
                     },
+                    onSwitchGoogleAccount = {
+                        viewModel.stopCloudListenersBeforeSignOut()
+                        val credManager = CredentialManager.create(context)
+                        GoogleAuthHelper.signOut(credManager, scope) {
+                            viewModel.logoutAccount()
+                        }
+                    },
                     onShowError = { message -> viewModel.showMessage(message) }
                 )
             } else {
+                key(firebaseUser!!.uid) {
                 NavHost(
                     navController = navController,
                     startDestination = "home",
                     modifier = Modifier.fillMaxSize()
                 ) {
                     composable("home") {
-                        if (session.role == UserRole.CLIENT) {
-                            ClientHomeScreen(
-                                viewModel = viewModel,
-                                biddingViewModel = biddingViewModel,
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                                onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
-                                onOpenSafety = { navController.navigate("safety") }
-                            )
-                        } else {
-                            CraftsmanDashboardScreen(
-                                viewModel = viewModel,
-                                biddingViewModel = biddingViewModel,
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                                onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
-                            )
+                        when (session.role) {
+                            UserRole.ADMIN -> {
+                                AdminDashboardScreen(
+                                    viewModel = viewModel,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } }
+                                )
+                            }
+                            UserRole.CLIENT -> {
+                                ClientHomeScreen(
+                                    viewModel = viewModel,
+                                    biddingViewModel = biddingViewModel,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
+                                    onOpenSafety = { navController.navigate("safety") }
+                                )
+                            }
+                            UserRole.CRAFTSMAN -> {
+                                CraftsmanDashboardScreen(
+                                    viewModel = viewModel,
+                                    biddingViewModel = biddingViewModel,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                                )
+                            }
                         }
                     }
 
@@ -257,6 +338,7 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                             onBack = { navController.popBackStack() }
                         )
                     }
+                }
                 }
             }
         }
