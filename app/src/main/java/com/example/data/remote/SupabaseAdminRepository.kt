@@ -18,7 +18,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 
 class SupabaseAdminRepository(
-    private val sessionManager: SupabaseSessionManager
+    private val sessionManager: SupabaseSessionManager,
+    private val storageService: SupabaseStorageService? = null
 ) {
     private val refreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 12)
 
@@ -132,15 +133,18 @@ class SupabaseAdminRepository(
         )
         if (res.isSuccessful) {
             res.body().orEmpty().map { dto ->
+                val front = storageService?.resolvePrivateKycUrl(dto.frontPhotoUri) ?: dto.frontPhotoUri
+                val back = storageService?.resolvePrivateKycUrl(dto.backPhotoUri) ?: dto.backPhotoUri
+                val selfie = storageService?.resolvePrivateKycUrl(dto.selfiePhotoUri) ?: dto.selfiePhotoUri
                 VerificationSubmission(
                     craftsmanId = dto.craftsmanId,
                     craftsmanName = dto.craftsmanName,
                     specialtyId = dto.specialtyId,
                     city = dto.city,
                     nationalIdNumber = dto.nationalIdNumber,
-                    frontPhotoUri = dto.frontPhotoUri,
-                    backPhotoUri = dto.backPhotoUri,
-                    selfiePhotoUri = dto.selfiePhotoUri,
+                    frontPhotoUri = front,
+                    backPhotoUri = back,
+                    selfiePhotoUri = selfie,
                     status = IdentityVerificationStatus.fromDb(dto.status),
                     rejectionReason = dto.rejectionReason,
                     reviewedByEmail = dto.reviewedByEmail,

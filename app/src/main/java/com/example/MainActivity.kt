@@ -101,8 +101,8 @@ class MainActivity : ComponentActivity() {
         val supabaseSessionManager = SupabaseSessionManager(prefs)
         val supabaseUserRepo = SupabaseUserProfileRepository(supabaseSessionManager)
         val supabaseMarketplaceRepo = SupabaseMarketplaceRepository(supabaseSessionManager)
-        val supabaseAdminRepo = SupabaseAdminRepository(supabaseSessionManager)
         val supabaseStorageService = SupabaseStorageService(applicationContext, supabaseSessionManager)
+        val supabaseAdminRepo = SupabaseAdminRepository(supabaseSessionManager, supabaseStorageService)
         val repository = HirafiRepository(
             dao = db.hirafiDao(),
             prefs = prefs,

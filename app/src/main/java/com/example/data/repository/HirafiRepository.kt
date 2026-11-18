@@ -636,11 +636,21 @@ class HirafiRepository(
             }
         } else selfiePhotoUri
 
+        val previewFront = if (supabaseStorageService != null && finalFront.startsWith("kyc://")) {
+            supabaseStorageService.resolvePrivateKycUrl(finalFront)
+        } else finalFront
+        val previewBack = if (supabaseStorageService != null && finalBack.startsWith("kyc://")) {
+            supabaseStorageService.resolvePrivateKycUrl(finalBack)
+        } else finalBack
+        val previewSelfie = if (supabaseStorageService != null && finalSelfie.startsWith("kyc://")) {
+            supabaseStorageService.resolvePrivateKycUrl(finalSelfie)
+        } else finalSelfie
+
         prefs.saveIdentityVerificationSubmission(
             nationalIdNumber = nationalIdNumber,
-            frontPhotoUri = finalFront,
-            backPhotoUri = finalBack,
-            selfiePhotoUri = finalSelfie,
+            frontPhotoUri = previewFront,
+            backPhotoUri = previewBack,
+            selfiePhotoUri = previewSelfie,
             status = IdentityVerificationStatus.PENDING_REVIEW
         )
         prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.PENDING_REVIEW, "")

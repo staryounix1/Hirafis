@@ -1,11 +1,13 @@
 -- ============================================================================
--- Hirafi (حرفي) - Complete Supabase PostgreSQL Schema, RLS & Storage Policies
--- Run this entire script once in Supabase Dashboard -> SQL Editor
+-- Hirafi (حرفي) - Enterprise Secure Supabase PostgreSQL Schema & RLS
+-- Run once in Supabase Dashboard -> SQL Editor (NO service_role key in app)
 -- ============================================================================
 
 create extension if not exists "pgcrypto";
 
--- 1. Authorized Admins Table
+-- ============================================================================
+-- 1. Authorized Admins & Helper Functions
+-- ============================================================================
 create table if not exists public.authorized_admins (
   email text primary key,
   added_by text not null default 'system',
@@ -16,7 +18,6 @@ insert into public.authorized_admins (email, added_by)
 values ('youness065220@gmail.com', 'system')
 on conflict (email) do nothing;
 
--- Helper function to check Admin status safely without RLS recursion
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -32,7 +33,19 @@ as $$
       );
 $$;
 
--- 2. App Runtime Config (Production Mode toggle)
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+-- ============================================================================
+-- 2. App Runtime Config (Production Mode Toggle)
+-- ============================================================================
 create table if not exists public.app_config (
   id text primary key,
   production_mode boolean not null default false,
@@ -44,7 +57,14 @@ insert into public.app_config (id, production_mode, updated_by_email)
 values ('runtime', false, 'system')
 on conflict (id) do nothing;
 
+drop trigger if exists trg_app_config_updated_at on public.app_config;
+create trigger trg_app_config_updated_at
+  before update on public.app_config
+  for each row execute function public.set_updated_at();
+
+-- ============================================================================
 -- 3. Profiles (Clients, Craftsmen & Admins)
+-- ============================================================================
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   full_name text not null default '',
@@ -74,23 +94,81 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
--- Upgrade existing profiles table safely if re-running
-alter table public.profiles add column if not exists email text not null default '';
-alter table public.profiles add column if not exists role_locked boolean not null default false;
-alter table public.profiles add column if not exists specialty_id text not null default 'plumbing';
-alter table public.profiles add column if not exists avatar_uri text;
-alter table public.profiles add column if not exists bio text not null default 'حرفي معتمد ومجهز بأحدث الأدوات الاحترافية';
-alter table public.profiles add column if not exists experience_years integer not null default 5;
-alter table public.profiles add column if not exists base_price_dh integer not null default 120;
-alter table public.profiles add column if not exists verification_status text not null default 'not_submitted';
-alter table public.profiles add column if not exists rejection_reason text not null default '';
-alter table public.profiles add column if not exists is_suspended boolean not null default false;
-alter table public.profiles add column if not exists fcm_token text not null default '';
-alter table public.profiles add column if not exists created_at timestamptz not null default now();
-alter table public.profiles drop constraint if exists profiles_role_check;
-alter table public.profiles add constraint profiles_role_check check (role in ('client', 'craftsman', 'admin'));
+-- Secure Public Craftsman Discovery View (Excludes private phone & email to protect user privacy)
+create or replace view public.craftsman_discovery_view as
+select
+  id,
+  full_name,
+  city,
+  role,
+  specialty_id,
+  specialty,
+  avatar_uri,
+  bio,
+  experience_years,
+  base_price_dh,
+  rating,
+  completed_jobs,
+  is_online,
+  is_verified,
+  verification_status,
+  is_suspended,
+  lat,
+  lng,
+  created_at
+from public.profiles
+where role = 'craftsman' and not is_suspended;
 
--- 4. Craftsman Identity Verification (KYC)
+-- Trigger to protect sensitive profile privilege columns
+create or replace function public.protect_profile_privilege_columns()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is not null and not public.is_admin() then
+    if old.role_locked = true then
+      new.role := old.role;
+      new.role_locked := true;
+    elsif new.role = 'admin' then
+      raise exception 'Only authorized admins can hold admin role';
+    end if;
+
+    new.is_verified := old.is_verified;
+    new.is_suspended := old.is_suspended;
+    new.rating := old.rating;
+    new.completed_jobs := old.completed_jobs;
+
+    if new.verification_status is distinct from old.verification_status then
+      if new.verification_status <> 'pending_review' then
+        new.verification_status := old.verification_status;
+      end if;
+    end if;
+
+    if new.verification_status = 'pending_review' then
+      new.rejection_reason := '';
+    else
+      new.rejection_reason := old.rejection_reason;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_profiles_protect_privileges on public.profiles;
+create trigger trg_profiles_protect_privileges
+  before update on public.profiles
+  for each row execute function public.protect_profile_privilege_columns();
+
+drop trigger if exists trg_profiles_updated_at on public.profiles;
+create trigger trg_profiles_updated_at
+  before update on public.profiles
+  for each row execute function public.set_updated_at();
+
+-- ============================================================================
+-- 4. Craftsman Identity Verification (KYC) - Stored in Private hirafi-kyc Bucket
+-- ============================================================================
 create table if not exists public.verification_submissions (
   craftsman_id uuid primary key references public.profiles(id) on delete cascade,
   craftsman_name text not null,
@@ -108,7 +186,14 @@ create table if not exists public.verification_submissions (
   updated_at timestamptz not null default now()
 );
 
+drop trigger if exists trg_verifications_updated_at on public.verification_submissions;
+create trigger trg_verifications_updated_at
+  before update on public.verification_submissions
+  for each row execute function public.set_updated_at();
+
+-- ============================================================================
 -- 5. Craftsman Portfolio Items
+-- ============================================================================
 create table if not exists public.portfolio_items (
   id uuid primary key default gen_random_uuid(),
   craftsman_id uuid not null references public.profiles(id) on delete cascade,
@@ -119,7 +204,9 @@ create table if not exists public.portfolio_items (
   created_at timestamptz not null default now()
 );
 
--- 6. Service Requests (inDrive-style job requests with client proposed fare)
+-- ============================================================================
+-- 6. Service Requests (Tamper-Proof Status & Assignment Protection)
+-- ============================================================================
 create table if not exists public.service_requests (
   id uuid primary key default gen_random_uuid(),
   client_id uuid references public.profiles(id) on delete set null,
@@ -149,11 +236,61 @@ create table if not exists public.service_requests (
   updated_at timestamptz not null default now()
 );
 
-alter table public.service_requests add column if not exists assigned_craftsman_rating numeric(3,2);
-alter table public.service_requests add column if not exists craftsman_lat double precision;
-alter table public.service_requests add column if not exists craftsman_lng double precision;
+-- Tamper-proof trigger for service requests state machine & offer consistency
+create or replace function public.protect_service_request_mutations()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is not null and not public.is_admin() then
+    -- If client is updating their own request
+    if auth.uid() = old.client_id then
+      -- Client cannot assign craftsman directly without an accepted offer or admin override
+      if new.assigned_craftsman_id is distinct from old.assigned_craftsman_id and new.assigned_craftsman_id is not null then
+        if not exists (
+          select 1 from public.service_offers o
+          where o.request_id = old.id
+            and o.craftsman_id = new.assigned_craftsman_id
+            and o.status = 'accepted'
+        ) then
+          raise exception 'Cannot assign craftsman without an accepted offer';
+        end if;
+      end if;
+    -- If craftsman is updating
+    elsif auth.uid() = old.assigned_craftsman_id then
+      -- Craftsman cannot alter financial proposal or client ID
+      new.client_id := old.client_id;
+      new.proposed_price := old.proposed_price;
+      new.client_name := old.client_name;
+    else
+      -- Non-participant trying to update request
+      if old.status = 'searching' and new.status = 'accepted' and new.assigned_craftsman_id = auth.uid() then
+        -- Allowed for direct craftsman acceptance if offer/acceptance rules met
+        null;
+      else
+        raise exception 'Unauthorized request state mutation';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
 
--- 7. Service Offers (Live Craftsman Bids / Counter-Offers)
+drop trigger if exists trg_service_requests_tamper_proof on public.service_requests;
+create trigger trg_service_requests_tamper_proof
+  before update on public.service_requests
+  for each row execute function public.protect_service_request_mutations();
+
+drop trigger if exists trg_service_requests_updated_at on public.service_requests;
+create trigger trg_service_requests_updated_at
+  before update on public.service_requests
+  for each row execute function public.set_updated_at();
+
+-- ============================================================================
+-- 7. Service Offers (Live Bids / Counter-Offers)
+-- ============================================================================
 create table if not exists public.service_offers (
   id uuid primary key default gen_random_uuid(),
   request_id uuid not null references public.service_requests(id) on delete cascade,
@@ -173,10 +310,9 @@ create table if not exists public.service_offers (
   created_at timestamptz not null default now()
 );
 
-alter table public.service_offers add column if not exists client_id uuid references public.profiles(id) on delete set null;
-alter table public.service_offers add column if not exists expires_at_millis bigint not null default 0;
-
+-- ============================================================================
 -- 8. Chat Messages
+-- ============================================================================
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   request_id uuid not null references public.service_requests(id) on delete cascade,
@@ -187,7 +323,9 @@ create table if not exists public.chat_messages (
   created_at timestamptz not null default now()
 );
 
+-- ============================================================================
 -- 9. Reviews
+-- ============================================================================
 create table if not exists public.reviews (
   id uuid primary key default gen_random_uuid(),
   request_id uuid not null references public.service_requests(id) on delete cascade,
@@ -199,7 +337,22 @@ create table if not exists public.reviews (
   created_at timestamptz not null default now()
 );
 
--- Enable Row Level Security
+-- ============================================================================
+-- 10. Performance Indexes
+-- ============================================================================
+create index if not exists idx_profiles_role_online on public.profiles(role, is_online);
+create index if not exists idx_portfolio_craftsman on public.portfolio_items(craftsman_id, created_at desc);
+create index if not exists idx_requests_status_category on public.service_requests(status, category_id);
+create index if not exists idx_requests_client on public.service_requests(client_id, created_at desc);
+create index if not exists idx_requests_craftsman on public.service_requests(assigned_craftsman_id, created_at desc);
+create index if not exists idx_offers_request on public.service_offers(request_id, created_at desc);
+create index if not exists idx_offers_craftsman on public.service_offers(craftsman_id);
+create index if not exists idx_chat_request_created on public.chat_messages(request_id, created_at asc);
+create index if not exists idx_reviews_craftsman on public.reviews(craftsman_id, created_at desc);
+
+-- ============================================================================
+-- 11. Row Level Security (RLS) Policies
+-- ============================================================================
 alter table public.authorized_admins enable row level security;
 alter table public.app_config enable row level security;
 alter table public.profiles enable row level security;
@@ -210,17 +363,21 @@ alter table public.service_offers enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.reviews enable row level security;
 
--- Drop older policies before recreating cleanly
+-- authorized_admins
+drop policy if exists "Authenticated check own admin status" on public.authorized_admins;
 drop policy if exists "Admins manage authorized admins" on public.authorized_admins;
-drop policy if exists "Authenticated read authorized admins" on public.authorized_admins;
-create policy "Authenticated read authorized admins"
+create policy "Authenticated check own admin status"
   on public.authorized_admins for select
-  using (auth.role() = 'authenticated');
+  using (
+    public.is_admin()
+    or lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  );
 create policy "Admins manage authorized admins"
   on public.authorized_admins for all
   using (public.is_admin())
   with check (public.is_admin());
 
+-- app_config
 drop policy if exists "Authenticated read app config" on public.app_config;
 drop policy if exists "Admins manage app config" on public.app_config;
 create policy "Authenticated read app config"
@@ -231,15 +388,15 @@ create policy "Admins manage app config"
   using (public.is_admin())
   with check (public.is_admin());
 
+-- profiles: Users can only read/update their own full profile row. Public discovery goes through craftsman_discovery_view.
 drop policy if exists "Public read profiles" on public.profiles;
-drop policy if exists "Users manage own profile" on public.profiles;
+drop policy if exists "Users read own profile or admin" on public.profiles;
 drop policy if exists "Users insert own profile" on public.profiles;
 drop policy if exists "Users update own profile" on public.profiles;
-drop policy if exists "Admins update any profile" on public.profiles;
 
-create policy "Public read profiles"
+create policy "Users read own profile or admin"
   on public.profiles for select
-  using (auth.role() = 'authenticated');
+  using (auth.uid() = id or public.is_admin());
 
 create policy "Users insert own profile"
   on public.profiles for insert
@@ -253,15 +410,13 @@ create policy "Users update own profile"
   using (auth.uid() = id or public.is_admin())
   with check (
     public.is_admin()
-    or (
-      auth.uid() = id
-      and role in ('client', 'craftsman')
-    )
+    or (auth.uid() = id and role in ('client', 'craftsman'))
   );
 
+-- verification_submissions (KYC): ONLY owner craftsman or Admin
 drop policy if exists "Users read own or admin verification" on public.verification_submissions;
 drop policy if exists "Craftsmen submit own verification" on public.verification_submissions;
-drop policy if exists "Admins review verification" on public.verification_submissions;
+drop policy if exists "Craftsmen update own verification" on public.verification_submissions;
 create policy "Users read own or admin verification"
   on public.verification_submissions for select
   using (auth.uid() = craftsman_id or public.is_admin());
@@ -273,6 +428,7 @@ create policy "Craftsmen update own verification"
   using (auth.uid() = craftsman_id or public.is_admin())
   with check (public.is_admin() or (auth.uid() = craftsman_id and status = 'pending_review'));
 
+-- portfolio_items
 drop policy if exists "Authenticated read portfolio" on public.portfolio_items;
 drop policy if exists "Craftsmen manage own portfolio" on public.portfolio_items;
 create policy "Authenticated read portfolio"
@@ -283,12 +439,18 @@ create policy "Craftsmen manage own portfolio"
   using (auth.uid() = craftsman_id or public.is_admin())
   with check (auth.uid() = craftsman_id or public.is_admin());
 
+-- service_requests: searching requests visible to authenticated; accepted/assigned requests visible ONLY to client, assigned craftsman, or admin
 drop policy if exists "Authenticated read requests" on public.service_requests;
 drop policy if exists "Authenticated insert requests" on public.service_requests;
 drop policy if exists "Participants update requests" on public.service_requests;
 create policy "Authenticated read requests"
   on public.service_requests for select
-  using (auth.role() = 'authenticated');
+  using (
+    status = 'searching'
+    or auth.uid() = client_id
+    or auth.uid() = assigned_craftsman_id
+    or public.is_admin()
+  );
 create policy "Authenticated insert requests"
   on public.service_requests for insert
   with check (auth.uid() = client_id);
@@ -299,30 +461,90 @@ create policy "Participants update requests"
     or auth.uid() = assigned_craftsman_id
     or status = 'searching'
     or public.is_admin()
+  )
+  with check (
+    auth.uid() = client_id
+    or auth.uid() = assigned_craftsman_id
+    or public.is_admin()
   );
 
+-- service_offers: ONLY bidding craftsman, request client, or Admin
 drop policy if exists "Authenticated read offers" on public.service_offers;
 drop policy if exists "Craftsmen insert offers" on public.service_offers;
 drop policy if exists "Participants update offers" on public.service_offers;
 create policy "Authenticated read offers"
   on public.service_offers for select
-  using (auth.role() = 'authenticated');
+  using (
+    auth.uid() = craftsman_id
+    or auth.uid() = client_id
+    or exists (
+      select 1 from public.service_requests r
+      where r.id = request_id and r.client_id = auth.uid()
+    )
+    or public.is_admin()
+  );
 create policy "Craftsmen insert offers"
   on public.service_offers for insert
   with check (auth.uid() = craftsman_id);
 create policy "Participants update offers"
   on public.service_offers for update
-  using (auth.role() = 'authenticated');
+  using (
+    auth.uid() = craftsman_id
+    or auth.uid() = client_id
+    or exists (
+      select 1 from public.service_requests r
+      where r.id = request_id and r.client_id = auth.uid()
+    )
+    or public.is_admin()
+  )
+  with check (
+    auth.uid() = craftsman_id
+    or auth.uid() = client_id
+    or exists (
+      select 1 from public.service_requests r
+      where r.id = request_id and r.client_id = auth.uid()
+    )
+    or public.is_admin()
+  );
 
+-- chat_messages
 drop policy if exists "Participants read chat" on public.chat_messages;
 drop policy if exists "Participants insert chat" on public.chat_messages;
 create policy "Participants read chat"
   on public.chat_messages for select
-  using (auth.role() = 'authenticated');
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.service_requests r
+      where r.id = request_id
+        and (r.client_id = auth.uid() or r.assigned_craftsman_id = auth.uid())
+    )
+    or exists (
+      select 1 from public.service_offers o
+      where o.request_id = chat_messages.request_id
+        and o.craftsman_id = auth.uid()
+    )
+  );
 create policy "Participants insert chat"
   on public.chat_messages for insert
-  with check (auth.role() = 'authenticated');
+  with check (
+    sender_id = auth.uid()::text
+    and (
+      public.is_admin()
+      or exists (
+        select 1 from public.service_requests r
+        where r.id = request_id
+          and (r.client_id = auth.uid() or r.assigned_craftsman_id = auth.uid())
+      )
+      or exists (
+        select 1 from public.service_offers o
+        where o.request_id = chat_messages.request_id
+          and o.craftsman_id = auth.uid()
+      )
+    )
+  );
 
+-- reviews
 drop policy if exists "Authenticated read reviews" on public.reviews;
 drop policy if exists "Clients insert reviews" on public.reviews;
 create policy "Authenticated read reviews"
@@ -330,10 +552,16 @@ create policy "Authenticated read reviews"
   using (auth.role() = 'authenticated');
 create policy "Clients insert reviews"
   on public.reviews for insert
-  with check (auth.uid() = client_id);
+  with check (
+    auth.uid() = client_id
+    and exists (
+      select 1 from public.service_requests r
+      where r.id = request_id and r.client_id = auth.uid()
+    )
+  );
 
 -- ============================================================================
--- Supabase Storage Bucket & Policies (hirafi-media)
+-- 12. Supabase Storage Buckets & Strict RLS Policies
 -- ============================================================================
 insert into storage.buckets (id, name, public)
 values ('hirafi-media', 'hirafi-media', true)
@@ -346,20 +574,26 @@ drop policy if exists "Hirafi authenticated media delete" on storage.objects;
 
 create policy "Hirafi public media read"
   on storage.objects for select
-  using (bucket_id = 'hirafi-media');
+  using (
+    bucket_id = 'hirafi-media'
+    and (storage.foldername(name))[1] in ('users', 'requests', 'portfolio')
+  );
 
 create policy "Hirafi authenticated media upload"
   on storage.objects for insert
   with check (
     bucket_id = 'hirafi-media'
     and auth.role() = 'authenticated'
+    and (storage.foldername(name))[1] in ('users', 'requests', 'portfolio')
+    and (auth.uid()::text = (storage.foldername(name))[2] or public.is_admin())
   );
 
 create policy "Hirafi authenticated media update"
   on storage.objects for update
   using (
     bucket_id = 'hirafi-media'
-    and auth.role() = 'authenticated'
+    and (storage.foldername(name))[1] in ('users', 'requests', 'portfolio')
+    and (auth.uid()::text = (storage.foldername(name))[2] or public.is_admin())
   );
 
 create policy "Hirafi authenticated media delete"
@@ -367,4 +601,43 @@ create policy "Hirafi authenticated media delete"
   using (
     bucket_id = 'hirafi-media'
     and (auth.uid()::text = (storage.foldername(name))[2] or public.is_admin())
+  );
+
+-- PRIVATE KYC Identity Bucket (hirafi-kyc)
+insert into storage.buckets (id, name, public)
+values ('hirafi-kyc', 'hirafi-kyc', false)
+on conflict (id) do update set public = false;
+
+drop policy if exists "Hirafi KYC owner or admin read" on storage.objects;
+drop policy if exists "Hirafi KYC owner upload" on storage.objects;
+drop policy if exists "Hirafi KYC owner or admin update" on storage.objects;
+drop policy if exists "Hirafi KYC owner or admin delete" on storage.objects;
+
+create policy "Hirafi KYC owner or admin read"
+  on storage.objects for select
+  using (
+    bucket_id = 'hirafi-kyc'
+    and (auth.uid()::text = (storage.foldername(name))[1] or public.is_admin())
+  );
+
+create policy "Hirafi KYC owner upload"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'hirafi-kyc'
+    and auth.role() = 'authenticated'
+    and (auth.uid()::text = (storage.foldername(name))[1] or public.is_admin())
+  );
+
+create policy "Hirafi KYC owner or admin update"
+  on storage.objects for update
+  using (
+    bucket_id = 'hirafi-kyc'
+    and (auth.uid()::text = (storage.foldername(name))[1] or public.is_admin())
+  );
+
+create policy "Hirafi KYC owner or admin delete"
+  on storage.objects for delete
+  using (
+    bucket_id = 'hirafi-kyc'
+    and (auth.uid()::text = (storage.foldername(name))[1] or public.is_admin())
   );

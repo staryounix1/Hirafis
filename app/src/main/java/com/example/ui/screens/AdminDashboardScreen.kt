@@ -547,7 +547,7 @@ private fun AdminOverviewTab(
                     }
                     Text("• المعرف الرسمي للتطبيق: com.hirafi.app", color = Color(0xFFD6DDE6), fontSize = 12.sp)
                     Text("• الخادم السحابي: Supabase Auth + PostgreSQL (ملف supabase/schema.sql)", color = VerifiedEmerald, fontSize = 12.sp)
-                    Text("• Supabase Storage: تأكد من تشغيل schema.sql لإنشاء Bucket: hirafi-media", color = ElectricLime, fontSize = 12.sp)
+                    Text("• Supabase Storage: تأكد من تشغيل schema.sql لإنشاء hirafi-media (عام) و hirafi-kyc (خاص للهوية)", color = ElectricLime, fontSize = 12.sp)
                     Text("• الإشعارات المحلية: قنوات تنبيهات العروض والرسائل وتوثيق الهوية مدمجة", color = Color(0xFFD6DDE6), fontSize = 12.sp)
                     Text("• قبل النشر: أضف مفاتيح SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets", color = Color(0xFFD6DDE6), fontSize = 12.sp)
                 }

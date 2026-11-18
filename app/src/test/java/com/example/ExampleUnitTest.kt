@@ -26,9 +26,12 @@ import com.example.data.model.PortfolioItem
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
+import com.example.data.model.ChatMessage
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.data.remote.MapRoutingService
+import com.example.data.remote.SupabaseConfig
+import com.example.data.remote.SupabaseTimestampParser
 import com.example.data.repository.HirafiRepository
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
@@ -547,5 +550,68 @@ class ExampleUnitTest {
     assertFalse(defaultConfig.productionMode)
     val prodConfig = AppRuntimeConfig(productionMode = true, updatedByEmail = adminSession.email)
     assertTrue(prodConfig.productionMode)
+  }
+
+  @Test
+  fun `supabase session auth timestamp parser and private kyc storage references behave securely`() {
+    val unauthenticated = UserSession(userId = "local_user", supabaseAccessToken = null)
+    assertFalse(unauthenticated.isSupabaseAuthenticated)
+
+    val authenticated = UserSession(
+      userId = "a1b2c3d4-0000-0000-0000-000000000001",
+      role = UserRole.CRAFTSMAN,
+      isRoleLocked = true,
+      supabaseAccessToken = "jwt.token.value"
+    )
+    assertTrue(authenticated.isSupabaseAuthenticated)
+
+    val utcMillis = SupabaseTimestampParser.parseIsoToMillis("2026-11-18T10:15:30.123456Z")
+    val offsetMillis = SupabaseTimestampParser.parseIsoToMillis("2026-11-18T11:15:30+01:00")
+    assertEquals(utcMillis, offsetMillis)
+
+    // KYC photos must generate private kyc:// references and never public hirafi-media URLs
+    val privateRef = SupabaseConfig.privateKycReference("uid-123/front_1000.jpg")
+    assertTrue(privateRef.startsWith("kyc://hirafi-kyc/"))
+    assertFalse(privateRef.contains("/object/public/"))
+
+    val parsedPrivate = SupabaseConfig.parsePrivateKycReference(privateRef)
+    assertEquals("hirafi-kyc" to "uid-123/front_1000.jpg", parsedPrivate)
+
+    val parsedAuthUrl = SupabaseConfig.parsePrivateKycReference(
+      "https://example.supabase.co/storage/v1/object/authenticated/hirafi-kyc/uid-123/selfie_2.jpg"
+    )
+    assertEquals("hirafi-kyc" to "uid-123/selfie_2.jpg", parsedAuthUrl)
+
+    assertNull(SupabaseConfig.parsePrivateKycReference("https://example.supabase.co/storage/v1/object/public/hirafi-media/users/uid-123/avatar.jpg"))
+  }
+
+  @Test
+  fun `service requests and chat messages preserve participant roles and lifecycle states`() {
+    assertEquals(RequestStatus.SEARCHING, RequestStatus.fromDb("searching"))
+    assertEquals(RequestStatus.IN_PROGRESS, RequestStatus.fromDb("in_progress"))
+    assertEquals(RequestStatus.COMPLETED, RequestStatus.fromDb("completed"))
+    assertEquals(RequestStatus.SEARCHING, RequestStatus.fromDb("invalid_status"))
+
+    val clientMessage = ChatMessage(
+      id = "msg_1",
+      requestId = "req_1",
+      senderId = "client_uuid",
+      senderName = "ياسين",
+      senderRole = UserRole.CLIENT,
+      text = "أين وصلت الآن؟",
+      createdAtMillis = 1_700_000_000_000L
+    )
+    val craftsmanMessage = ChatMessage(
+      id = "msg_2",
+      requestId = "req_1",
+      senderId = "craftsman_uuid",
+      senderName = "عمر السباك",
+      senderRole = UserRole.CRAFTSMAN,
+      text = "أنا على بعد 5 دقائق",
+      createdAtMillis = 1_700_000_010_000L
+    )
+    assertEquals(UserRole.CLIENT, clientMessage.senderRole)
+    assertEquals(UserRole.CRAFTSMAN, craftsmanMessage.senderRole)
+    assertTrue(craftsmanMessage.createdAtMillis > clientMessage.createdAtMillis)
   }
 }

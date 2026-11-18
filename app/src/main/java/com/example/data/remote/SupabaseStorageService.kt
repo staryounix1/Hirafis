@@ -12,7 +12,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
@@ -20,6 +22,10 @@ class SupabaseStorageService(
     private val context: Context,
     private val sessionManager: SupabaseSessionManager
 ) {
+    private data class CachedSignedUrl(val signedUrl: String, val expiresAtMillis: Long)
+
+    private val signedUrlCache = ConcurrentHashMap<String, CachedSignedUrl>()
+
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -29,33 +35,94 @@ class SupabaseStorageService(
     suspend fun uploadAvatar(localUri: String): Result<String> =
         uploadCompressedImage(
             localUri = localUri,
+            isPrivateKyc = false,
             remotePathBuilder = { uid -> "users/$uid/avatar_${System.currentTimeMillis()}.jpg" }
         )
 
     suspend fun uploadRequestPhoto(requestId: String, localUri: String): Result<String> =
         uploadCompressedImage(
             localUri = localUri,
+            isPrivateKyc = false,
             remotePathBuilder = { uid -> "requests/$uid/$requestId.jpg" }
         )
 
     suspend fun uploadPortfolioPhoto(itemId: String, localUri: String): Result<String> =
         uploadCompressedImage(
             localUri = localUri,
+            isPrivateKyc = false,
             remotePathBuilder = { uid -> "portfolio/$uid/$itemId.jpg" }
         )
 
     suspend fun uploadVerificationPhoto(slotName: String, localUri: String): Result<String> =
         uploadCompressedImage(
             localUri = localUri,
-            remotePathBuilder = { uid -> "verifications/$uid/${slotName}_${System.currentTimeMillis()}.jpg" }
+            isPrivateKyc = true,
+            remotePathBuilder = { uid -> "$uid/${slotName}_${System.currentTimeMillis()}.jpg" }
         )
+
+    suspend fun resolvePrivateKycUrl(storedUri: String): String {
+        val trimmed = storedUri.trim()
+        if (trimmed.isBlank()) return ""
+        val parsed = SupabaseConfig.parsePrivateKycReference(trimmed) ?: return trimmed
+        val (bucket, objectPath) = parsed
+
+        if (!SupabaseConfig.isConfigured) return trimmed
+        val now = System.currentTimeMillis()
+        signedUrlCache[trimmed]?.let { cached ->
+            if (cached.expiresAtMillis > now + 60_000L) {
+                return cached.signedUrl
+            }
+        }
+
+        val bearer = sessionManager.getValidBearerToken() ?: return trimmed
+        return try {
+            val signEndpoint = SupabaseConfig.signObjectUrl(bucket, objectPath)
+            val payload = JSONObject().put("expiresIn", SIGNED_URL_EXPIRES_SECONDS).toString()
+            val req = Request.Builder()
+                .url(signEndpoint)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .header("apikey", SupabaseConfig.anonKey)
+                .header("Authorization", bearer)
+                .build()
+
+            val response = withContext(Dispatchers.IO) {
+                httpClient.newCall(req).execute()
+            }
+            response.use { res ->
+                if (!res.isSuccessful) {
+                    Log.w(TAG, "Failed to sign KYC object (${res.code}) for $bucket/$objectPath")
+                    return trimmed
+                }
+                val bodyStr = res.body?.string().orEmpty()
+                val signedPath = runCatching {
+                    val json = JSONObject(bodyStr)
+                    json.optString("signedURL").ifBlank { json.optString("signedUrl") }
+                }.getOrNull().orEmpty()
+                if (signedPath.isBlank()) return trimmed
+
+                val absoluteUrl = SupabaseConfig.toAbsoluteStorageUrl(signedPath)
+                signedUrlCache[trimmed] = CachedSignedUrl(
+                    signedUrl = absoluteUrl,
+                    expiresAtMillis = now + SIGNED_URL_CACHE_MS
+                )
+                absoluteUrl
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Signed URL resolution error: ${e.message}")
+            trimmed
+        }
+    }
 
     private suspend fun uploadCompressedImage(
         localUri: String,
+        isPrivateKyc: Boolean,
         remotePathBuilder: (uid: String) -> String
     ): Result<String> {
         val trimmed = localUri.trim()
-        if (trimmed.startsWith("https://", ignoreCase = true) ||
+        if (trimmed.startsWith(SupabaseConfig.KYC_PRIVATE_REF_PREFIX) ||
+            trimmed.startsWith("https://", ignoreCase = true) ||
             trimmed.startsWith("http://", ignoreCase = true)
         ) {
             return Result.success(trimmed)
@@ -74,7 +141,11 @@ class SupabaseStorageService(
             } ?: return Result.failure(IllegalArgumentException("تعذر قراءة الصورة المختارة من الجهاز"))
 
             val objectPath = remotePathBuilder(uid)
-            val uploadUrl = SupabaseConfig.objectUploadUrl(objectPath)
+            val uploadUrl = if (isPrivateKyc) {
+                SupabaseConfig.kycObjectUploadUrl(objectPath)
+            } else {
+                SupabaseConfig.objectUploadUrl(objectPath)
+            }
             val req = Request.Builder()
                 .url(uploadUrl)
                 .post(bytes.toRequestBody("image/jpeg".toMediaType()))
@@ -88,7 +159,12 @@ class SupabaseStorageService(
             }
             response.use { res ->
                 if (res.isSuccessful) {
-                    Result.success(SupabaseConfig.publicMediaUrl(objectPath))
+                    val resultRef = if (isPrivateKyc) {
+                        SupabaseConfig.privateKycReference(objectPath)
+                    } else {
+                        SupabaseConfig.publicMediaUrl(objectPath)
+                    }
+                    Result.success(resultRef)
                 } else {
                     val errText = runCatching { res.body?.string() }.getOrNull().orEmpty()
                     Log.w(TAG, "Supabase Storage upload failed (${res.code}): $errText")
@@ -146,5 +222,7 @@ class SupabaseStorageService(
         private const val TAG = "SupabaseStorage"
         private const val MAX_DIMENSION_PX = 1080
         private const val JPEG_QUALITY = 82
+        private const val SIGNED_URL_EXPIRES_SECONDS = 3600
+        private const val SIGNED_URL_CACHE_MS = 45 * 60 * 1000L
     }
 }
