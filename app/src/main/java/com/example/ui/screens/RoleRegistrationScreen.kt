@@ -200,13 +200,13 @@ fun RoleRegistrationScreen(
                     }
                     Column {
                         Text(
-                            text = "التسجيل السحابي في حرفي",
+                            text = "التسجيل في تطبيق حرفي",
                             color = Color.White,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "مربوط مباشرة بـ Supabase لتلاقي الزبائن والحرفيين",
+                            text = "تطبيق حرفي يربط الزبائن بأفضل الحرفيين المحترفين",
                             color = ElectricLime,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -220,7 +220,7 @@ fun RoleRegistrationScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "تنبيه: نوع الحساب (زبون أو حرفي) يُحفظ ويُقفل لكل حساب في قاعدة بيانات Supabase. يمكنك التسجيل بالبريد الإلكتروني أو عبر حساب غوغل.",
+                        text = "تنبيه: نوع الحساب (زبون أو حرفي) يُحفظ ويُقفل لكل حساب بأمان. يمكنك التسجيل بالبريد الإلكتروني أو عبر حساب غوغل.",
                         color = StarAmber,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -546,7 +546,71 @@ fun RoleRegistrationScreen(
                 }
             }
         } else {
-            // Email + Password Form Card
+            // Google Sign-In Button on TOP
+            OutlinedButton(
+                onClick = {
+                    isGoogleLoading = true
+                    GoogleAuthHelper.launchGoogleSignIn(
+                        context = context,
+                        credentialManager = credentialManager,
+                        scope = scope,
+                        onAuthSuccess = { account ->
+                            isGoogleLoading = false
+                            onGoogleAuthSuccess(
+                                account,
+                                fullName.trim(),
+                                selectedCity,
+                                selectedRole,
+                                chosenSpecialty
+                            )
+                        },
+                        onAuthError = { msg ->
+                            isGoogleLoading = false
+                            onShowError(msg)
+                        },
+                        onAuthCancelled = {
+                            isGoogleLoading = false
+                        }
+                    )
+                },
+                enabled = !isBusy,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.5.dp, ObsidianBlack),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = ObsidianBlack
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .testTag("google_sign_in_button")
+            ) {
+                if (isGoogleLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("جاري الاتصال بحساب غوغل...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                } else {
+                    GoogleLogoBadge(modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = if (isSignUpMode) "المتابعة كـ $roleLabel عبر غوغل" else "تسجيل الدخول عبر غوغل",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                HorizontalDivider(modifier = Modifier.weight(1f))
+                Text("أو", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                HorizontalDivider(modifier = Modifier.weight(1f))
+            }
+
+            // Email + Password Form Card on BOTTOM
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -558,7 +622,7 @@ fun RoleRegistrationScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = if (isSignUpMode) "3. بيانات الدخول عبر Supabase" else "تسجيل الدخول لحسابك",
+                        text = if (isSignUpMode) "3. بيانات الدخول بالبريد الإلكتروني" else "تسجيل الدخول لحسابك",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
@@ -632,7 +696,7 @@ fun RoleRegistrationScreen(
                         if (isCloudSaving) {
                             CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
                             Spacer(Modifier.width(10.dp))
-                            Text("جاري الاتصال بـ Supabase...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("جاري الاتصال...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         } else {
                             Text(
                                 text = if (isSignUpMode) "إنشاء حساب $roleLabel" else "تسجيل الدخول",
@@ -641,69 +705,6 @@ fun RoleRegistrationScreen(
                             )
                         }
                     }
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                HorizontalDivider(modifier = Modifier.weight(1f))
-                Text("أو", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HorizontalDivider(modifier = Modifier.weight(1f))
-            }
-
-            OutlinedButton(
-                onClick = {
-                    isGoogleLoading = true
-                    GoogleAuthHelper.launchGoogleSignIn(
-                        context = context,
-                        credentialManager = credentialManager,
-                        scope = scope,
-                        onAuthSuccess = { account ->
-                            isGoogleLoading = false
-                            onGoogleAuthSuccess(
-                                account,
-                                fullName.trim(),
-                                selectedCity,
-                                selectedRole,
-                                chosenSpecialty
-                            )
-                        },
-                        onAuthError = { msg ->
-                            isGoogleLoading = false
-                            onShowError(msg)
-                        },
-                        onAuthCancelled = {
-                            isGoogleLoading = false
-                        }
-                    )
-                },
-                enabled = !isBusy,
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.5.dp, ObsidianBlack),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = ObsidianBlack
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("google_sign_in_button")
-            ) {
-                if (isGoogleLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Text("جاري الاتصال بحساب غوغل...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                } else {
-                    GoogleLogoBadge(modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = if (isSignUpMode) "المتابعة كـ $roleLabel عبر غوغل" else "تسجيل الدخول عبر غوغل",
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp
-                    )
                 }
             }
         }
