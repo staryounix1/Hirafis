@@ -228,11 +228,14 @@ service cloud.firestore {
                        (
                          (
                            request.auth.uid == userId &&
-                           (!existing().roleLocked || (
-                             incoming().role == existing().role &&
-                             incoming().roleLocked == true &&
-                             (existing().role != 'craftsman' || incoming().specialtyId == existing().specialtyId)
-                           )) &&
+                           (!existing().roleLocked ||
+                             (isAuthorizedAdmin() && incoming().role == 'admin') ||
+                             (
+                               incoming().role == existing().role &&
+                               incoming().roleLocked == true &&
+                               (existing().role != 'craftsman' || incoming().specialtyId == existing().specialtyId)
+                             )
+                           ) &&
                            (incoming().role != 'admin' || isAuthorizedAdmin()) &&
                            (!('isSuspended' in incoming()) || incoming().isSuspended == (('isSuspended' in existing()) ? existing().isSuspended : false)) &&
                            (!('verificationStatus' in incoming()) || incoming().verificationStatus in ['not_submitted', 'pending_review']) &&

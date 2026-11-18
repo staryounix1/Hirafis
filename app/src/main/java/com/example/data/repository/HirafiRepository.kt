@@ -26,28 +26,26 @@ import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.data.model.VerificationSubmission
-import com.example.data.remote.FirebaseCloudStorageService
-import com.example.data.remote.FirestoreAdminRepository
-import com.example.data.remote.FirestoreMarketplaceRepository
-import com.example.data.remote.FirestoreUserProfile
-import com.example.data.remote.FirestoreUserProfileRepository
 import com.example.data.remote.MapRoutingService
-import com.example.data.remote.SupabaseAuthRequest
-import com.example.data.remote.SupabaseChatMessageDto
+import com.example.data.remote.SupabaseAdminRepository
+import com.example.data.remote.SupabaseAuthState
 import com.example.data.remote.SupabaseClientProvider
 import com.example.data.remote.SupabaseConfig
-import com.example.data.remote.SupabaseOfferPatchDto
+import com.example.data.remote.SupabaseMarketplaceRepository
 import com.example.data.remote.SupabaseProfileDto
 import com.example.data.remote.SupabaseProfileLocationPatchDto
-import com.example.data.remote.SupabaseRequestPatchDto
-import com.example.data.remote.SupabaseReviewDto
-import com.example.data.remote.SupabaseServiceOfferDto
-import com.example.data.remote.SupabaseServiceRequestDto
+import com.example.data.remote.SupabaseSessionManager
+import com.example.data.remote.SupabaseStorageService
+import com.example.data.remote.SupabaseTimestampParser
+import com.example.data.remote.SupabaseUserProfileRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -58,17 +56,22 @@ import kotlin.math.roundToInt
 class HirafiRepository(
     private val dao: HirafiDao,
     private val prefs: UserPreferencesDataStore,
-    private val firestoreUserRepo: FirestoreUserProfileRepository? = null,
-    private val firestoreMarketplaceRepo: FirestoreMarketplaceRepository? = null,
-    private val firestoreAdminRepo: FirestoreAdminRepository? = null,
-    private val cloudStorageService: FirebaseCloudStorageService? = null
+    private val supabaseSessionManager: SupabaseSessionManager? = null,
+    private val supabaseUserRepo: SupabaseUserProfileRepository? = null,
+    private val supabaseMarketplaceRepo: SupabaseMarketplaceRepository? = null,
+    private val supabaseAdminRepo: SupabaseAdminRepository? = null,
+    private val supabaseStorageService: SupabaseStorageService? = null
 ) {
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val fallbackAuthStateFlow = MutableStateFlow<SupabaseAuthState?>(null).asStateFlow()
 
     val userSession: Flow<UserSession> = prefs.userSessionFlow
 
-    val isFirestoreAuthenticated: Boolean
-        get() = firestoreMarketplaceRepo?.isAuthenticated == true
+    val supabaseAuthStateFlow: StateFlow<SupabaseAuthState?>
+        get() = supabaseSessionManager?.authState ?: fallbackAuthStateFlow
+
+    val isSupabaseAuthenticated: Boolean
+        get() = supabaseMarketplaceRepo?.isAuthenticated == true
 
     fun getCraftsmenAround(centerLat: Double = 33.5822, centerLng: Double = -7.6324): List<CraftsmanPin> =
         computeCraftsmenAround(centerLat, centerLng)
@@ -94,32 +97,32 @@ class HirafiRepository(
     fun observePortfolioForCraftsman(craftsmanId: String): Flow<List<PortfolioItem>> =
         dao.observePortfolioForCraftsman(craftsmanId).map { list -> list.map { it.toDomain() } }
 
-    fun observeFirestoreClientRequests(): Flow<List<ServiceRequest>> =
-        firestoreMarketplaceRepo?.observeClientRequests() ?: emptyFlow()
+    fun observeCloudClientRequests(): Flow<List<ServiceRequest>> =
+        supabaseMarketplaceRepo?.observeClientRequests() ?: emptyFlow()
 
-    fun observeFirestoreCraftsmanAssignedRequests(): Flow<List<ServiceRequest>> =
-        firestoreMarketplaceRepo?.observeCraftsmanAssignedRequests() ?: emptyFlow()
+    fun observeCloudCraftsmanAssignedRequests(): Flow<List<ServiceRequest>> =
+        supabaseMarketplaceRepo?.observeCraftsmanAssignedRequests() ?: emptyFlow()
 
-    fun observeFirestoreSearchingRequests(specialtyId: String): Flow<List<ServiceRequest>> =
-        firestoreMarketplaceRepo?.observeSearchingRequests(specialtyId) ?: emptyFlow()
+    fun observeCloudSearchingRequests(specialtyId: String): Flow<List<ServiceRequest>> =
+        supabaseMarketplaceRepo?.observeSearchingRequests(specialtyId) ?: emptyFlow()
 
-    fun observeFirestoreOffersForRequest(requestId: String, role: UserRole): Flow<List<ServiceOffer>> =
-        firestoreMarketplaceRepo?.observeOffersForRequest(requestId, role) ?: emptyFlow()
+    fun observeCloudOffersForRequest(requestId: String, role: UserRole): Flow<List<ServiceOffer>> =
+        supabaseMarketplaceRepo?.observeOffersForRequest(requestId, role) ?: emptyFlow()
 
-    fun observeFirestoreMessagesForRequest(requestId: String): Flow<List<ChatMessage>> =
-        firestoreMarketplaceRepo?.observeMessagesForRequest(requestId) ?: emptyFlow()
+    fun observeCloudMessagesForRequest(requestId: String): Flow<List<ChatMessage>> =
+        supabaseMarketplaceRepo?.observeMessagesForRequest(requestId) ?: emptyFlow()
 
-    fun observeFirestoreOnlineCraftsmen(centerLat: Double, centerLng: Double): Flow<List<CraftsmanPin>> =
-        firestoreMarketplaceRepo?.observeOnlineCraftsmen(centerLat, centerLng) ?: emptyFlow()
+    fun observeCloudOnlineCraftsmen(centerLat: Double, centerLng: Double): Flow<List<CraftsmanPin>> =
+        supabaseMarketplaceRepo?.observeOnlineCraftsmen(centerLat, centerLng) ?: emptyFlow()
 
-    fun observeFirestoreRequestLiveCoords(requestId: String): Flow<Pair<Double, Double>?> =
-        firestoreMarketplaceRepo?.observeRequestLiveCoords(requestId) ?: emptyFlow()
+    fun observeCloudRequestLiveCoords(requestId: String): Flow<Pair<Double, Double>?> =
+        supabaseMarketplaceRepo?.observeRequestLiveCoords(requestId) ?: emptyFlow()
 
-    fun observeFirestorePortfolioForCraftsman(craftsmanId: String): Flow<List<PortfolioItem>> =
-        firestoreMarketplaceRepo?.observePortfolioForCraftsman(craftsmanId) ?: emptyFlow()
+    fun observeCloudPortfolioForCraftsman(craftsmanId: String): Flow<List<PortfolioItem>> =
+        supabaseMarketplaceRepo?.observePortfolioForCraftsman(craftsmanId) ?: emptyFlow()
 
     suspend fun fetchPortfolioOnce(craftsmanId: String): List<PortfolioItem> =
-        firestoreMarketplaceRepo?.fetchPortfolioOnce(craftsmanId)?.getOrNull().orEmpty()
+        supabaseMarketplaceRepo?.fetchPortfolioOnce(craftsmanId)?.getOrNull().orEmpty()
 
     suspend fun cacheRemoteRequests(requests: List<ServiceRequest>) {
         if (requests.isEmpty()) return
@@ -141,32 +144,26 @@ class HirafiRepository(
         dao.upsertPortfolioItems(items.map { it.toEntity() })
     }
 
-    fun observeMyCloudProfile(): Flow<FirestoreUserProfile?> =
-        firestoreUserRepo?.observeMyProfile() ?: emptyFlow()
+    fun observeMyCloudProfile(): Flow<SupabaseProfileDto?> =
+        supabaseUserRepo?.observeMyProfile() ?: emptyFlow()
 
     fun observeAppRuntimeConfig(): Flow<AppRuntimeConfig> =
-        firestoreAdminRepo?.observeAppRuntimeConfig() ?: emptyFlow()
+        supabaseAdminRepo?.observeAppRuntimeConfig() ?: emptyFlow()
 
     fun observeAdminVerificationSubmissions(): Flow<List<VerificationSubmission>> =
-        firestoreAdminRepo?.observeVerificationSubmissions() ?: emptyFlow()
+        supabaseAdminRepo?.observeVerificationSubmissions() ?: emptyFlow()
 
     fun observeAdminAllUsers(): Flow<List<AdminUserRecord>> =
-        firestoreAdminRepo?.observeAllUsers() ?: emptyFlow()
+        supabaseAdminRepo?.observeAllUsers() ?: emptyFlow()
 
     fun observeAdminAllRequests(): Flow<List<ServiceRequest>> =
-        firestoreAdminRepo?.observeAllServiceRequests() ?: emptyFlow()
+        supabaseAdminRepo?.observeAllServiceRequests() ?: emptyFlow()
 
     fun observeAuthorizedAdmins(): Flow<List<AuthorizedAdminRecord>> =
-        firestoreAdminRepo?.observeAuthorizedAdmins() ?: emptyFlow()
+        supabaseAdminRepo?.observeAuthorizedAdmins() ?: emptyFlow()
 
     suspend fun clearSeededRequests() {
         dao.clearSeededRequests()
-    }
-
-    suspend fun syncFcmToken(token: String) {
-        if (token.isBlank()) return
-        prefs.saveFcmToken(token)
-        firestoreUserRepo?.updateFcmToken(token)
     }
 
     suspend fun applyRemoteVerificationUpdate(
@@ -179,7 +176,7 @@ class HirafiRepository(
     }
 
     suspend fun seedInitialMarketplaceRequestsIfEmpty() {
-        if (isFirestoreAuthenticated) return
+        if (isSupabaseAuthenticated) return
         val existing = dao.observeAllRequests().first()
         if (existing.isNotEmpty()) return
         val now = System.currentTimeMillis()
@@ -268,55 +265,171 @@ class HirafiRepository(
 
     suspend fun setRole(role: UserRole): Boolean = prefs.setRole(role)
 
-    suspend fun registerFirstTimeAccount(
-        fullName: String,
-        email: String = "",
-        phone: String = "+212 612-345678",
-        city: String,
-        role: UserRole,
-        specialtyId: String?,
-        passwordHash: String? = null,
-        authProvider: String = "email",
-        userIdOverride: String? = null
-    ): Boolean {
-        val registered = prefs.registerFirstTimeAccount(
-            fullName = fullName,
-            email = email,
-            phone = phone,
-            city = city,
-            role = role,
-            specialtyId = specialtyId,
-            passwordHash = passwordHash,
-            authProvider = authProvider,
-            userIdOverride = userIdOverride
+    suspend fun restoreSupabaseSession(): Result<UserSession?> {
+        val manager = supabaseSessionManager ?: return Result.success(null)
+        val restored = manager.restoreSavedSession() ?: return Result.success(null)
+        return restoreExistingSupabaseProfileIfLocked(
+            uid = restored.uid,
+            fallbackEmail = restored.email
         )
-        if (registered) {
-            val session = prefs.userSessionFlow.first()
-            pushProfileToSupabase(session)
-        }
-        return registered
     }
 
-    suspend fun completeGoogleAccountLogin(
-        uid: String,
-        displayName: String,
+    suspend fun completeGoogleSupabaseLogin(
+        idToken: String,
+        fallbackDisplayName: String,
         preferredDisplayName: String = "",
-        email: String,
+        fallbackEmail: String,
         city: String,
         preferredRole: UserRole,
         preferredSpecialtyId: String?
     ): Result<UserSession> {
-        val userRepo = firestoreUserRepo
-            ?: return Result.failure(IllegalStateException("تعذر الاتصال بخدمة قاعدة البيانات السحابية"))
+        val manager = supabaseSessionManager
+            ?: return Result.failure(IllegalStateException("تعذر تهيئة جلسة Supabase"))
+        val authState = if (idToken.isNotBlank()) {
+            manager.signInWithGoogleIdToken(idToken).getOrElse { return Result.failure(it) }
+        } else {
+            manager.authState.value
+                ?: return Result.failure(IllegalStateException("يرجى اختيار حساب غوغل أولاً"))
+        }
+
         val resolvedName = preferredDisplayName.trim().takeIf { it.length >= 2 }
-            ?: displayName.trim().takeIf { it.length >= 2 }
-            ?: email.substringBefore("@").trim().takeIf { it.length >= 2 }
+            ?: authState.displayName.trim().takeIf { it.length >= 2 }
+            ?: fallbackDisplayName.trim().takeIf { it.length >= 2 }
+            ?: authState.email.substringBefore("@").trim().takeIf { it.length >= 2 }
             ?: "مستخدم غوغل"
+
+        return applySyncedSupabaseProfile(
+            authState = authState,
+            displayName = resolvedName,
+            fallbackEmail = fallbackEmail,
+            city = city,
+            preferredRole = preferredRole,
+            preferredSpecialtyId = preferredSpecialtyId,
+            authProvider = "google"
+        )
+    }
+
+    suspend fun signUpWithSupabaseEmailAccount(
+        email: String,
+        password: String,
+        fullName: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?
+    ): Result<UserSession> {
+        val manager = supabaseSessionManager
+            ?: return Result.failure(IllegalStateException("تعذر تهيئة جلسة Supabase"))
+        val authState = manager.signUpWithEmail(email, password).getOrElse {
+            return Result.failure(it)
+        }
+        val resolvedName = fullName.trim().takeIf { it.length >= 2 }
+            ?: email.trim().substringBefore("@").takeIf { it.length >= 2 }
+            ?: "مستخدم حرفي"
+        return applySyncedSupabaseProfile(
+            authState = authState,
+            displayName = resolvedName,
+            fallbackEmail = email,
+            city = city,
+            preferredRole = preferredRole,
+            preferredSpecialtyId = preferredSpecialtyId,
+            authProvider = "supabase"
+        )
+    }
+
+    suspend fun signInWithSupabaseEmailAccount(
+        email: String,
+        password: String
+    ): Result<UserSession> {
+        val manager = supabaseSessionManager
+            ?: return Result.failure(IllegalStateException("تعذر تهيئة جلسة Supabase"))
+        val authState = manager.signInWithEmail(email, password).getOrElse {
+            return Result.failure(it)
+        }
+        val restored = restoreExistingSupabaseProfileIfLocked(
+            uid = authState.uid,
+            fallbackEmail = authState.email.ifBlank { email },
+            authProvider = "supabase"
+        ).getOrElse { return Result.failure(it) }
+
+        if (restored != null) {
+            return Result.success(restored)
+        }
+
+        // First-time sign in for an auth user created in Supabase Dashboard (e.g. Admin)
+        val fallbackName = authState.displayName.trim().takeIf { it.length >= 2 }
+            ?: authState.email.substringBefore("@").trim().takeIf { it.length >= 2 }
+            ?: "مستخدم حرفي"
+        return applySyncedSupabaseProfile(
+            authState = authState,
+            displayName = fallbackName,
+            fallbackEmail = authState.email.ifBlank { email },
+            city = "الدار البيضاء",
+            preferredRole = UserRole.CLIENT,
+            preferredSpecialtyId = null,
+            authProvider = "supabase"
+        )
+    }
+
+    suspend fun restoreExistingSupabaseProfileIfLocked(
+        uid: String,
+        fallbackEmail: String,
+        authProvider: String = "supabase"
+    ): Result<UserSession?> {
+        val userRepo = supabaseUserRepo ?: return Result.success(null)
+        val existing = userRepo.fetchExistingProfileIfLocked().getOrElse { err ->
+            return Result.failure(err)
+        } ?: return Result.success(null)
+
+        val currentSaved = prefs.userSessionFlow.first()
+        val restoredProvider = if (currentSaved.authProvider == "google") "google" else authProvider
+        val restoredRole = UserRole.fromDb(existing.role)
+        val restoredSpec = if (restoredRole == UserRole.CRAFTSMAN) {
+            existing.specialtyId.takeIf { it.isNotBlank() } ?: "plumbing"
+        } else null
+
+        prefs.registerFirstTimeAccount(
+            fullName = existing.fullName.ifBlank { "مستخدم حرفي" },
+            email = existing.email.ifBlank { fallbackEmail },
+            phone = existing.phone.ifBlank { "+212 612-345678" },
+            city = existing.city.ifBlank { "الدار البيضاء" },
+            role = restoredRole,
+            specialtyId = restoredSpec,
+            authProvider = restoredProvider,
+            userIdOverride = uid,
+            avatarUri = existing.avatarUri,
+            bio = existing.bio,
+            experienceYears = existing.experienceYears,
+            basePriceDh = existing.basePriceDh,
+            verificationStatus = IdentityVerificationStatus.fromDb(existing.verificationStatus),
+            rejectionReason = existing.rejectionReason,
+            isSuspended = existing.isSuspended,
+            forceOverwrite = true
+        )
+        val updatedSession = prefs.userSessionFlow.first()
+        if (restoredRole == UserRole.CRAFTSMAN) {
+            val coord = MoroccanLocations.coordForCity(updatedSession.city)
+            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
+        }
+        return Result.success(updatedSession)
+    }
+
+    private suspend fun applySyncedSupabaseProfile(
+        authState: SupabaseAuthState,
+        displayName: String,
+        fallbackEmail: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?,
+        authProvider: String
+    ): Result<UserSession> {
+        val userRepo = supabaseUserRepo
+            ?: return Result.failure(IllegalStateException("تعذر الاتصال بخدمة Supabase"))
+        val resolvedEmail = authState.email.ifBlank { fallbackEmail }.trim().lowercase()
         val resolvedSpec = preferredSpecialtyId ?: "plumbing"
 
         val synced = userRepo.syncOrRestoreProfile(
-            fullName = resolvedName,
-            email = email,
+            fullName = displayName,
+            email = resolvedEmail,
             city = city,
             chosenRole = preferredRole.dbValue,
             chosenSpecialtyId = resolvedSpec
@@ -329,33 +442,29 @@ class HirafiRepository(
             synced.specialtyId.takeIf { it.isNotBlank() } ?: resolvedSpec
         } else null
 
-        val finalName = synced.fullName.takeIf { it.isNotBlank() } ?: resolvedName
-        val finalEmail = synced.email.takeIf { it.isNotBlank() } ?: email
-        val finalCity = synced.city.takeIf { it.isNotBlank() } ?: city
-        val finalPhone = synced.phone.takeIf { it.isNotBlank() } ?: "+212 612-345678"
-
         prefs.registerFirstTimeAccount(
-            fullName = finalName,
-            email = finalEmail,
-            phone = finalPhone,
-            city = finalCity,
+            fullName = synced.fullName.ifBlank { displayName },
+            email = synced.email.ifBlank { resolvedEmail },
+            phone = synced.phone.ifBlank { "+212 612-345678" },
+            city = synced.city.ifBlank { city },
             role = finalRole,
             specialtyId = finalSpecialty,
-            authProvider = "google",
-            userIdOverride = uid,
+            authProvider = authProvider,
+            userIdOverride = authState.uid,
             avatarUri = synced.avatarUri,
             bio = synced.bio,
-            experienceYears = synced.experienceYears.toInt(),
-            basePriceDh = synced.basePriceDh.toInt(),
+            experienceYears = synced.experienceYears,
+            basePriceDh = synced.basePriceDh,
             verificationStatus = IdentityVerificationStatus.fromDb(synced.verificationStatus),
             rejectionReason = synced.rejectionReason,
             isSuspended = synced.isSuspended,
             forceOverwrite = true
         )
+
         val updatedSession = prefs.userSessionFlow.first()
         if (finalRole == UserRole.CRAFTSMAN) {
             val coord = MoroccanLocations.coordForCity(updatedSession.city)
-            val dirResult = firestoreMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
+            val dirResult = supabaseMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
             if (dirResult != null && dirResult.isFailure) {
                 return Result.failure(
                     dirResult.exceptionOrNull()
@@ -366,57 +475,18 @@ class HirafiRepository(
         return Result.success(updatedSession)
     }
 
-    suspend fun restoreExistingGoogleProfileIfLocked(
-        uid: String,
-        fallbackEmail: String
-    ): Result<UserSession?> {
-        val userRepo = firestoreUserRepo ?: return Result.success(null)
-        val existing = userRepo.fetchExistingProfileIfLocked().getOrElse { err ->
-            return Result.failure(err)
-        } ?: return Result.success(null)
-
-        val restoredRole = UserRole.fromDb(existing.role)
-        val restoredSpec = if (restoredRole == UserRole.CRAFTSMAN) {
-            existing.specialtyId.takeIf { it.isNotBlank() } ?: "plumbing"
-        } else null
-        prefs.registerFirstTimeAccount(
-            fullName = existing.fullName.ifBlank { "مستخدم حرفي" },
-            email = existing.email.ifBlank { fallbackEmail },
-            phone = existing.phone.ifBlank { "+212 612-345678" },
-            city = existing.city.ifBlank { "الدار البيضاء" },
-            role = restoredRole,
-            specialtyId = restoredSpec,
-            authProvider = "google",
-            userIdOverride = uid,
-            avatarUri = existing.avatarUri,
-            bio = existing.bio,
-            experienceYears = existing.experienceYears.toInt(),
-            basePriceDh = existing.basePriceDh.toInt(),
-            verificationStatus = IdentityVerificationStatus.fromDb(existing.verificationStatus),
-            rejectionReason = existing.rejectionReason,
-            isSuspended = existing.isSuspended,
-            forceOverwrite = true
-        )
-        val updatedSession = prefs.userSessionFlow.first()
-        if (restoredRole == UserRole.CRAFTSMAN) {
-            val coord = MoroccanLocations.coordForCity(updatedSession.city)
-            firestoreMarketplaceRepo?.upsertCraftsmanDirectory(updatedSession, coord.lat, coord.lng)
-        }
-        return Result.success(updatedSession)
-    }
-
     suspend fun syncCraftsmanDirectoryPresence(
         latOverride: Double? = null,
         lngOverride: Double? = null
     ): Result<Unit> {
         val session = prefs.userSessionFlow.first()
-        if (session.role != UserRole.CRAFTSMAN || !isFirestoreAuthenticated) {
+        if (session.role != UserRole.CRAFTSMAN || !isSupabaseAuthenticated) {
             return Result.success(Unit)
         }
         val cityCoord = MoroccanLocations.coordForCity(session.city)
         val lat = latOverride ?: cityCoord.lat
         val lng = lngOverride ?: cityCoord.lng
-        return firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session, lat, lng)
+        return supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, lat, lng)
             ?: Result.success(Unit)
     }
 
@@ -425,14 +495,14 @@ class HirafiRepository(
         val session = prefs.userSessionFlow.first()
         if (session.role == UserRole.CRAFTSMAN) {
             val coord = MoroccanLocations.coordForCity(session.city)
-            firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
+            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
         }
     }
 
     suspend fun setCity(city: String) {
         prefs.setCity(city)
         val session = prefs.userSessionFlow.first()
-        firestoreUserRepo?.updateProfile(
+        supabaseUserRepo?.updateProfile(
             fullName = session.fullName,
             phone = session.phone,
             city = city,
@@ -443,17 +513,12 @@ class HirafiRepository(
         )
         if (session.role == UserRole.CRAFTSMAN) {
             val coord = MoroccanLocations.coordForCity(city)
-            firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session.copy(city = city), coord.lat, coord.lng)
+            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session.copy(city = city), coord.lat, coord.lng)
         }
     }
 
     suspend fun setSpecialty(specialtyId: String): Boolean {
-        val lockedNow = prefs.setSpecialty(specialtyId)
-        if (lockedNow) {
-            val session = prefs.userSessionFlow.first()
-            pushProfileToSupabase(session)
-        }
-        return lockedNow
+        return prefs.setSpecialty(specialtyId)
     }
 
     suspend fun updateProfile(
@@ -465,8 +530,8 @@ class HirafiRepository(
         experienceYears: Int? = null,
         basePriceDh: Int? = null
     ) {
-        val cloudAvatarUri = if (!avatarUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadAvatar(avatarUri).getOrNull() ?: avatarUri
+        val cloudAvatarUri = if (!avatarUri.isNullOrBlank() && supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadAvatar(avatarUri).getOrNull() ?: avatarUri
         } else avatarUri
 
         prefs.updateProfile(
@@ -479,7 +544,7 @@ class HirafiRepository(
             basePriceDh = basePriceDh
         )
         val session = prefs.userSessionFlow.first()
-        firestoreUserRepo?.updateProfile(
+        supabaseUserRepo?.updateProfile(
             fullName = session.fullName,
             phone = session.phone,
             city = session.city,
@@ -490,9 +555,8 @@ class HirafiRepository(
         )
         if (session.role == UserRole.CRAFTSMAN) {
             val coord = MoroccanLocations.coordForCity(session.city)
-            firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
+            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
         }
-        pushProfileToSupabase(session)
     }
 
     suspend fun addPortfolioItem(
@@ -511,8 +575,8 @@ class HirafiRepository(
         val category = HirafiCategories.byId(session.craftsmanSpecialtyId)
         val itemId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
-        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadPortfolioPhoto(itemId, photoUri).getOrNull() ?: photoUri
+        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadPortfolioPhoto(itemId, photoUri).getOrNull() ?: photoUri
         } else photoUri
 
         val item = PortfolioItem(
@@ -525,13 +589,18 @@ class HirafiRepository(
             createdAtMillis = now
         )
         dao.upsertPortfolioItem(item.toEntity())
-        firestoreMarketplaceRepo?.addPortfolioItem(item)
+        val cloudResult = supabaseMarketplaceRepo?.addPortfolioItem(item)
+        if (cloudResult != null && cloudResult.isFailure) {
+            return Result.failure(
+                cloudResult.exceptionOrNull() ?: IllegalStateException("تعذر حفظ العمل في Supabase")
+            )
+        }
         return Result.success(item)
     }
 
     suspend fun deletePortfolioItem(itemId: String) {
         dao.deletePortfolioItem(itemId)
-        firestoreMarketplaceRepo?.deletePortfolioItem(itemId)
+        supabaseMarketplaceRepo?.deletePortfolioItem(itemId)
     }
 
     suspend fun submitCraftsmanIdentityVerification(
@@ -546,22 +615,22 @@ class HirafiRepository(
         }
 
         var cloudImagesUploaded = true
-        val finalFront = if (cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadVerificationPhoto("front", frontPhotoUri).getOrElse {
+        val finalFront = if (supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadVerificationPhoto("front", frontPhotoUri).getOrElse {
                 cloudImagesUploaded = false
                 frontPhotoUri
             }
         } else frontPhotoUri
 
-        val finalBack = if (cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadVerificationPhoto("back", backPhotoUri).getOrElse {
+        val finalBack = if (supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadVerificationPhoto("back", backPhotoUri).getOrElse {
                 cloudImagesUploaded = false
                 backPhotoUri
             }
         } else backPhotoUri
 
-        val finalSelfie = if (cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadVerificationPhoto("selfie", selfiePhotoUri).getOrElse {
+        val finalSelfie = if (supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadVerificationPhoto("selfie", selfiePhotoUri).getOrElse {
                 cloudImagesUploaded = false
                 selfiePhotoUri
             }
@@ -576,7 +645,7 @@ class HirafiRepository(
         )
         prefs.updateIdentityVerificationStatus(IdentityVerificationStatus.PENDING_REVIEW, "")
 
-        val cloudResult = firestoreAdminRepo?.submitVerificationRequest(
+        val cloudResult = supabaseAdminRepo?.submitVerificationRequest(
             craftsmanName = session.fullName,
             specialtyId = session.craftsmanSpecialtyId,
             city = session.city,
@@ -587,7 +656,7 @@ class HirafiRepository(
         )
         if (cloudResult != null && cloudResult.isFailure) {
             return Result.failure(
-                cloudResult.exceptionOrNull() ?: IllegalStateException("تعذر إرسال طلب التوثيق إلى السحابة")
+                cloudResult.exceptionOrNull() ?: IllegalStateException("تعذر إرسال طلب التوثيق إلى Supabase")
             )
         }
         return Result.success(cloudImagesUploaded)
@@ -600,7 +669,7 @@ class HirafiRepository(
     }
 
     suspend fun setProductionMode(enabled: Boolean): Result<Unit> =
-        firestoreAdminRepo?.setProductionMode(enabled)
+        supabaseAdminRepo?.setProductionMode(enabled)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun reviewCraftsmanVerification(
@@ -608,7 +677,7 @@ class HirafiRepository(
         approved: Boolean,
         rejectionReason: String = ""
     ): Result<Unit> =
-        firestoreAdminRepo?.reviewVerificationSubmission(craftsmanId, approved, rejectionReason)
+        supabaseAdminRepo?.reviewVerificationSubmission(craftsmanId, approved, rejectionReason)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun toggleUserSuspended(
@@ -616,19 +685,19 @@ class HirafiRepository(
         isCraftsman: Boolean,
         suspended: Boolean
     ): Result<Unit> =
-        firestoreAdminRepo?.toggleUserSuspended(userId, isCraftsman, suspended)
+        supabaseAdminRepo?.toggleUserSuspended(userId, isCraftsman, suspended)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun cancelRequestAsAdmin(requestId: String): Result<Unit> =
-        firestoreAdminRepo?.cancelRequestAsAdmin(requestId)
+        supabaseAdminRepo?.cancelRequestAsAdmin(requestId)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun addAuthorizedAdmin(email: String): Result<Unit> =
-        firestoreAdminRepo?.addAuthorizedAdmin(email)
+        supabaseAdminRepo?.addAuthorizedAdmin(email)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun removeAuthorizedAdmin(email: String): Result<Unit> =
-        firestoreAdminRepo?.removeAuthorizedAdmin(email)
+        supabaseAdminRepo?.removeAuthorizedAdmin(email)
             ?: Result.failure(IllegalStateException("خدمة الإدارة غير متوفرة"))
 
     suspend fun createServiceRequest(
@@ -652,8 +721,8 @@ class HirafiRepository(
         val category = HirafiCategories.byId(categoryId)
         val now = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
-        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && cloudStorageService != null && isFirestoreAuthenticated) {
-            cloudStorageService.uploadRequestPhoto(requestId, photoUri).getOrNull() ?: photoUri
+        val uploadedPhotoUri = if (!photoUri.isNullOrBlank() && supabaseStorageService != null && isSupabaseAuthenticated) {
+            supabaseStorageService.uploadRequestPhoto(requestId, photoUri).getOrNull() ?: photoUri
         } else photoUri
         val resolvedTitle = title.trim().let { if (it.length < 2) "طلب ${category.nameAr}" else it }
         val entity = ServiceRequestEntity(
@@ -684,12 +753,10 @@ class HirafiRepository(
         )
         val domain = entity.toDomain()
         dao.upsertRequest(entity)
-        firestoreMarketplaceRepo?.createServiceRequest(domain)
-        pushRequestToSupabase(entity, session)
+        supabaseMarketplaceRepo?.createServiceRequest(domain)
 
-        // Only simulate local sample offers when NOT in productionMode and targeting offline/seeded craftsman
         val isSeededSampleTarget = preferredCraftsmanId != null && preferredCraftsmanId.startsWith("c_")
-        if (!productionMode && (!isFirestoreAuthenticated || isSeededSampleTarget)) {
+        if (!productionMode && (!isSupabaseAuthenticated || isSeededSampleTarget)) {
             simulateLiveIncomingOffers(
                 requestId = requestId,
                 categoryId = categoryId,
@@ -710,12 +777,8 @@ class HirafiRepository(
             updatedAtMillis = System.currentTimeMillis()
         )
         dao.upsertRequest(updated)
-        firestoreMarketplaceRepo?.updateProposedPrice(requestId, newPrice)
-        patchRequestInSupabase(
-            requestId = requestId,
-            patch = SupabaseRequestPatchDto(proposedPrice = newPrice)
-        )
-        if (!isFirestoreAuthenticated && updated.status == RequestStatus.SEARCHING.dbValue) {
+        supabaseMarketplaceRepo?.updateProposedPrice(requestId, newPrice)
+        if (!isSupabaseAuthenticated && updated.status == RequestStatus.SEARCHING.dbValue) {
             simulateQuickPriceBoostOffer(requestId, existing.categoryId, existing.lat, existing.lng, newPrice)
         }
     }
@@ -723,7 +786,7 @@ class HirafiRepository(
     suspend fun expandSearchRadius(requestId: String, newRadiusKm: Int) {
         val existing = dao.getRequestById(requestId) ?: return
         if (existing.status != RequestStatus.SEARCHING.dbValue) return
-        if (isFirestoreAuthenticated) return
+        if (isSupabaseAuthenticated) return
         val existingOffers = dao.observeOffersForRequest(requestId).first()
         val alreadyOfferedIds = existingOffers.map { it.craftsmanId }.toSet()
         val candidates = getCraftsmenAround(existing.lat, existing.lng)
@@ -886,8 +949,7 @@ class HirafiRepository(
             expiresAtMillis = now + 60_000L
         )
         dao.upsertOffer(offer)
-        firestoreMarketplaceRepo?.submitOffer(offer.toDomain(), req.clientId)
-        pushOfferToSupabase(offer, session)
+        supabaseMarketplaceRepo?.submitOffer(offer.toDomain(), req.clientId)
     }
 
     suspend fun craftsmanDirectAcceptRequest(requestId: String) {
@@ -906,25 +968,13 @@ class HirafiRepository(
             updatedAtMillis = now
         )
         dao.upsertRequest(updated)
-        firestoreMarketplaceRepo?.directAcceptRequestAsCraftsman(
+        supabaseMarketplaceRepo?.directAcceptRequestAsCraftsman(
             requestId = requestId,
             acceptedPrice = req.proposedPrice,
             session = session
         )
-        patchRequestInSupabase(
-            requestId = requestId,
-            patch = SupabaseRequestPatchDto(
-                status = RequestStatus.ACCEPTED.dbValue,
-                acceptedPrice = req.proposedPrice,
-                assignedCraftsmanId = session.userId.takeIf { session.isSupabaseAuthenticated },
-                assignedCraftsmanName = session.fullName,
-                assignedCraftsmanPhone = session.phone
-            )
-        )
         insertSystemWelcomeMessage(
             requestId = requestId,
-            clientId = req.clientId,
-            assignedCraftsmanId = session.userId,
             senderId = session.userId,
             senderName = session.fullName,
             role = UserRole.CRAFTSMAN,
@@ -966,22 +1016,10 @@ class HirafiRepository(
         )
         dao.upsertRequest(updatedReq)
 
-        firestoreMarketplaceRepo?.acceptOffer(offer)
-        patchOfferInSupabase(offer.id, SupabaseOfferPatchDto(status = OfferStatus.ACCEPTED.dbValue))
-        patchRequestInSupabase(
-            requestId = req.id,
-            patch = SupabaseRequestPatchDto(
-                status = RequestStatus.ACCEPTED.dbValue,
-                acceptedPrice = offer.offeredPrice,
-                assignedCraftsmanName = offer.craftsmanName,
-                assignedCraftsmanPhone = offer.craftsmanPhone
-            )
-        )
+        supabaseMarketplaceRepo?.acceptOffer(offer)
 
         insertSystemWelcomeMessage(
             requestId = req.id,
-            clientId = req.clientId,
-            assignedCraftsmanId = offer.craftsmanId,
             senderId = req.clientId,
             senderName = req.clientName,
             role = UserRole.CLIENT,
@@ -992,15 +1030,13 @@ class HirafiRepository(
     suspend fun declineOffer(offerId: String) {
         val offer = dao.getOfferById(offerId) ?: return
         dao.upsertOffer(offer.copy(status = OfferStatus.DECLINED.dbValue))
-        firestoreMarketplaceRepo?.updateOfferStatusOrCounter(
-            requestId = offer.requestId,
+        supabaseMarketplaceRepo?.updateOfferStatusOrCounter(
             offerId = offerId,
             status = OfferStatus.DECLINED,
             offeredPrice = offer.offeredPrice,
             note = offer.note,
             expiresAtMillis = offer.expiresAtMillis
         )
-        patchOfferInSupabase(offerId, SupabaseOfferPatchDto(status = OfferStatus.DECLINED.dbValue))
     }
 
     suspend fun counterOffer(offer: ServiceOffer, counterPrice: Int) {
@@ -1024,19 +1060,14 @@ class HirafiRepository(
             expiresAtMillis = newExpires
         )
         dao.upsertOffer(updated)
-        firestoreMarketplaceRepo?.updateOfferStatusOrCounter(
-            requestId = offer.requestId,
+        supabaseMarketplaceRepo?.updateOfferStatusOrCounter(
             offerId = offer.id,
             status = OfferStatus.COUNTERED,
             offeredPrice = counterPrice,
             note = noteText,
             expiresAtMillis = newExpires
         )
-        patchOfferInSupabase(
-            offer.id,
-            SupabaseOfferPatchDto(status = OfferStatus.COUNTERED.dbValue, offeredPrice = counterPrice)
-        )
-        if (!isFirestoreAuthenticated || offer.craftsmanId.startsWith("c_")) {
+        if (!isSupabaseAuthenticated || offer.craftsmanId.startsWith("c_")) {
             repoScope.launch {
                 delay(1400L)
                 val latest = dao.getOfferById(offer.id) ?: return@launch
@@ -1060,11 +1091,7 @@ class HirafiRepository(
         val req = dao.getRequestById(requestId) ?: return
         val updated = req.copy(status = nextStatus.dbValue, updatedAtMillis = System.currentTimeMillis())
         dao.upsertRequest(updated)
-        firestoreMarketplaceRepo?.advanceRequestStatus(requestId, nextStatus)
-        patchRequestInSupabase(
-            requestId = requestId,
-            patch = SupabaseRequestPatchDto(status = nextStatus.dbValue)
-        )
+        supabaseMarketplaceRepo?.advanceRequestStatus(requestId, nextStatus)
     }
 
     suspend fun cancelRequest(requestId: String) {
@@ -1075,11 +1102,8 @@ class HirafiRepository(
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         val session = prefs.userSessionFlow.first()
-        val req = dao.getRequestById(requestId)
         insertSystemWelcomeMessage(
             requestId = requestId,
-            clientId = req?.clientId ?: session.userId,
-            assignedCraftsmanId = req?.assignedCraftsmanId,
             senderId = session.userId,
             senderName = session.fullName,
             role = session.role,
@@ -1089,8 +1113,6 @@ class HirafiRepository(
 
     private suspend fun insertSystemWelcomeMessage(
         requestId: String,
-        clientId: String,
-        assignedCraftsmanId: String?,
         senderId: String,
         senderName: String,
         role: UserRole,
@@ -1106,30 +1128,7 @@ class HirafiRepository(
             createdAtMillis = System.currentTimeMillis()
         )
         dao.insertMessage(msg)
-        firestoreMarketplaceRepo?.sendChatMessage(
-            message = msg.toDomain(),
-            clientId = clientId,
-            assignedCraftsmanId = assignedCraftsmanId
-        )
-        val session = prefs.userSessionFlow.first()
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-        val token = session.supabaseAccessToken
-        if (api != null && !token.isNullOrBlank()) {
-            runCatching {
-                api.postChatMessage(
-                    apiKey = SupabaseConfig.anonKey,
-                    bearer = "Bearer $token",
-                    body = SupabaseChatMessageDto(
-                        id = msg.id,
-                        requestId = requestId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        senderRole = role.dbValue,
-                        messageText = text
-                    )
-                )
-            }.onFailure { Log.w(TAG, "Supabase chat post skipped/failed", it) }
-        }
+        supabaseMarketplaceRepo?.sendChatMessage(msg.toDomain())
     }
 
     suspend fun submitReview(
@@ -1149,44 +1148,25 @@ class HirafiRepository(
             createdAtMillis = System.currentTimeMillis()
         )
         dao.insertReview(review)
-        firestoreMarketplaceRepo?.submitReview(review.toDomain())
-        val session = prefs.userSessionFlow.first()
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-        val token = session.supabaseAccessToken
-        if (api != null && !token.isNullOrBlank()) {
-            runCatching {
-                api.postReview(
-                    apiKey = SupabaseConfig.anonKey,
-                    bearer = "Bearer $token",
-                    body = SupabaseReviewDto(
-                        id = review.id,
-                        requestId = requestId,
-                        craftsmanId = craftsmanId.takeIf { it.length == 36 },
-                        clientId = session.userId.takeIf { it.length == 36 },
-                        rating = rating,
-                        tags = tags,
-                        comment = comment
-                    )
-                )
-            }.onFailure { Log.w(TAG, "Supabase review post failed", it) }
-        }
+        supabaseMarketplaceRepo?.submitReview(review.toDomain())
     }
 
     suspend fun publishCraftsmanLiveLocation(lat: Double, lng: Double, activeRequestId: String? = null) {
         val session = prefs.userSessionFlow.first()
-        if (session.role == UserRole.CRAFTSMAN && isFirestoreAuthenticated) {
-            firestoreMarketplaceRepo?.upsertCraftsmanDirectory(session, lat, lng)
+        if (session.role == UserRole.CRAFTSMAN && isSupabaseAuthenticated) {
+            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, lat, lng)
             if (!activeRequestId.isNullOrBlank()) {
-                firestoreMarketplaceRepo?.updateCraftsmanLiveLocationOnRequest(activeRequestId, lat, lng)
+                supabaseMarketplaceRepo?.updateCraftsmanLiveLocationOnRequest(activeRequestId, lat, lng)
             }
+            return
         }
         val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val token = session.supabaseAccessToken ?: return
+        val bearer = supabaseSessionManager?.getValidBearerToken() ?: return
         if (session.userId.length != 36) return
         runCatching {
             api.patchProfileLocation(
                 apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
+                bearer = bearer,
                 idFilter = "eq.${session.userId}",
                 patch = SupabaseProfileLocationPatchDto(lat = lat, lng = lng)
             )
@@ -1196,12 +1176,11 @@ class HirafiRepository(
     suspend fun fetchAssignedCraftsmanLocation(craftsmanId: String): Pair<Double, Double>? {
         if (craftsmanId.length != 36) return null
         val api = SupabaseClientProvider.getApiServiceOrNull() ?: return null
-        val session = prefs.userSessionFlow.first()
-        val token = session.supabaseAccessToken ?: return null
+        val bearer = supabaseSessionManager?.getValidBearerToken() ?: return null
         return runCatching {
             val response = api.getProfileLocation(
                 apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
+                bearer = bearer,
                 idFilter = "eq.$craftsmanId"
             )
             if (response.isSuccessful) {
@@ -1214,138 +1193,28 @@ class HirafiRepository(
         }.getOrNull()
     }
 
-    suspend fun signInWithSupabase(email: String, password: String): Result<String> {
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-            ?: return Result.failure(IllegalStateException("يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets أولاً."))
-        return runCatching {
-            val response = api.signIn(SupabaseConfig.anonKey, SupabaseAuthRequest(email.trim(), password))
-            if (!response.isSuccessful) {
-                error("فشل تسجيل الدخول (${response.code()})")
-            }
-            val body = response.body() ?: error("استجابة فارغة من Supabase")
-            val token = body.accessToken ?: error("لم يتم استلام رمز الجلسة")
-            val uid = body.user?.id ?: "supabase_user"
-            prefs.saveSupabaseAuth(uid, email.trim(), token)
-            val session = prefs.userSessionFlow.first()
-            pushProfileToSupabase(session)
-            syncFromSupabase()
-            "تم تسجيل الدخول وربط حسابك مع Supabase بنجاح"
-        }
-    }
-
-    suspend fun signUpWithSupabase(
-        email: String,
-        password: String,
-        fullName: String,
-        phone: String,
-        city: String
-    ): Result<String> {
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-            ?: return Result.failure(IllegalStateException("يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets أولاً."))
-        return runCatching {
-            prefs.updateProfile(fullName, phone, city)
-            val response = api.signUp(SupabaseConfig.anonKey, SupabaseAuthRequest(email.trim(), password))
-            if (!response.isSuccessful) {
-                error("فشل إنشاء الحساب (${response.code()})")
-            }
-            val body = response.body()
-            val token = body?.accessToken
-            val uid = body?.user?.id
-            if (!token.isNullOrBlank() && !uid.isNullOrBlank()) {
-                prefs.saveSupabaseAuth(uid, email.trim(), token)
-                val session = prefs.userSessionFlow.first()
-                pushProfileToSupabase(session)
-                "تم إنشاء الحساب وتفعيله على Supabase بنجاح"
-            } else {
-                "تم إنشاء الحساب! تحقق من بريدك الإلكتروني لتأكيد التفعيل ثم سجل الدخول."
-            }
-        }
-    }
-
-    suspend fun signOutSupabase() {
-        prefs.clearSupabaseAuth()
-    }
-
-    suspend fun logoutAccount() {
-        prefs.logoutAccount()
-    }
-
-    suspend fun syncFromSupabase(): Result<Int> {
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-            ?: return Result.failure(IllegalStateException("Supabase غير مفعّل بعد"))
-        val session = prefs.userSessionFlow.first()
-        val token = session.supabaseAccessToken
-            ?: return Result.failure(IllegalStateException("قم بتسجيل الدخول أولاً للمزامنة"))
-        return runCatching {
-            val response = api.getServiceRequests(SupabaseConfig.anonKey, "Bearer $token")
-            if (!response.isSuccessful) {
-                error("تعذر جلب الطلبات (${response.code()})")
-            }
-            val remote = response.body().orEmpty()
-            val mapped = remote.map { dto ->
-                ServiceRequestEntity(
-                    id = dto.id,
-                    clientId = dto.clientId ?: session.userId,
-                    clientName = dto.clientName,
-                    categoryId = dto.categoryId,
-                    categoryName = dto.categoryName,
-                    title = dto.title,
-                    description = dto.description,
-                    addressLabel = dto.addressLabel,
-                    lat = dto.lat,
-                    lng = dto.lng,
-                    mapX = 0.5f,
-                    mapY = 0.5f,
-                    proposedPrice = dto.proposedPrice,
-                    acceptedPrice = dto.acceptedPrice,
-                    paymentMethod = dto.paymentMethod,
-                    isUrgent = dto.isUrgent,
-                    status = dto.status,
-                    assignedCraftsmanId = dto.assignedCraftsmanId,
-                    assignedCraftsmanName = dto.assignedCraftsmanName,
-                    assignedCraftsmanPhone = dto.assignedCraftsmanPhone,
-                    assignedCraftsmanRating = 4.9,
-                    photoUri = dto.photoUri,
-                    createdAtMillis = System.currentTimeMillis(),
-                    updatedAtMillis = System.currentTimeMillis()
-                )
-            }
-            if (mapped.isNotEmpty()) {
-                dao.upsertRequests(mapped)
-            }
-            mapped.size
-        }
-    }
-
     suspend fun syncOffersForRequestFromSupabase(requestId: String): Result<Int> {
-        val api = SupabaseClientProvider.getApiServiceOrNull()
-            ?: return Result.success(0)
+        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(0)
+        val bearer = supabaseSessionManager?.getValidBearerToken() ?: return Result.success(0)
         val session = prefs.userSessionFlow.first()
-        val token = session.supabaseAccessToken ?: return Result.success(0)
         return runCatching {
             val response = api.getOffersForRequest(
                 apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                requestIdFilter = "eq.$requestId"
+                bearer = bearer,
+                requestIdFilter = "eq.$requestId",
+                craftsmanIdFilter = if (session.role == UserRole.CRAFTSMAN) "eq.${session.userId}" else null
             )
             if (!response.isSuccessful) {
                 error("تعذر جلب العروض (${response.code()})")
             }
             val now = System.currentTimeMillis()
-            val remote = response.body().orEmpty()
-                .let { list ->
-                    if (session.role == UserRole.CRAFTSMAN) {
-                        list.filter { it.craftsmanId == session.userId }
-                    } else {
-                        list
-                    }
-                }
-            val mapped = remote.map { dto ->
-                val existing = dao.getOfferById(dto.id)
+            val mapped = response.body().orEmpty().map { dto ->
+                val createdMs = SupabaseTimestampParser.parseIsoToMillis(dto.createdAt)
+                val resolvedExpiry = if (dto.expiresAtMillis > 0L) dto.expiresAtMillis else (createdMs + 60_000L)
                 ServiceOfferEntity(
                     id = dto.id,
                     requestId = dto.requestId,
-                    craftsmanId = dto.craftsmanId ?: existing?.craftsmanId ?: "remote_craftsman",
+                    craftsmanId = dto.craftsmanId ?: "remote_craftsman",
                     craftsmanName = dto.craftsmanName,
                     craftsmanPhone = dto.craftsmanPhone,
                     craftsmanRating = dto.craftsmanRating,
@@ -1356,8 +1225,8 @@ class HirafiRepository(
                     distanceKm = dto.distanceKm,
                     note = dto.note,
                     status = dto.status,
-                    createdAtMillis = existing?.createdAtMillis ?: now,
-                    expiresAtMillis = existing?.expiresAtMillis ?: (now + 55_000L)
+                    createdAtMillis = createdMs.takeIf { it > 0L } ?: now,
+                    expiresAtMillis = resolvedExpiry
                 )
             }
             if (mapped.isNotEmpty()) {
@@ -1367,107 +1236,9 @@ class HirafiRepository(
         }
     }
 
-    private suspend fun pushProfileToSupabase(session: UserSession) {
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val token = session.supabaseAccessToken ?: return
-        runCatching {
-            api.upsertProfile(
-                apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                profile = SupabaseProfileDto(
-                    id = session.userId,
-                    fullName = session.fullName,
-                    phone = session.phone,
-                    city = session.city,
-                    role = session.role.dbValue,
-                    specialty = HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr,
-                    isOnline = session.isCraftsmanOnline
-                )
-            )
-        }.onFailure { Log.w(TAG, "Profile sync failed", it) }
-    }
-
-    private suspend fun pushRequestToSupabase(entity: ServiceRequestEntity, session: UserSession) {
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val token = session.supabaseAccessToken ?: return
-        runCatching {
-            api.createServiceRequest(
-                apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                body = SupabaseServiceRequestDto(
-                    id = entity.id,
-                    clientId = session.userId.takeIf { it.length == 36 },
-                    clientName = entity.clientName,
-                    categoryId = entity.categoryId,
-                    categoryName = entity.categoryName,
-                    title = entity.title,
-                    description = entity.description,
-                    addressLabel = entity.addressLabel,
-                    lat = entity.lat,
-                    lng = entity.lng,
-                    proposedPrice = entity.proposedPrice,
-                    acceptedPrice = entity.acceptedPrice,
-                    paymentMethod = entity.paymentMethod,
-                    isUrgent = entity.isUrgent,
-                    status = entity.status,
-                    photoUri = entity.photoUri
-                )
-            )
-        }.onFailure { Log.w(TAG, "Supabase create request failed", it) }
-    }
-
-    private suspend fun patchRequestInSupabase(requestId: String, patch: SupabaseRequestPatchDto) {
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val session = prefs.userSessionFlow.first()
-        val token = session.supabaseAccessToken ?: return
-        runCatching {
-            api.patchServiceRequest(
-                apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                idFilter = "eq.$requestId",
-                patch = patch
-            )
-        }.onFailure { Log.w(TAG, "Supabase patch request failed", it) }
-    }
-
-    private suspend fun pushOfferToSupabase(offer: ServiceOfferEntity, session: UserSession) {
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val token = session.supabaseAccessToken ?: return
-        runCatching {
-            api.createOffer(
-                apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                body = SupabaseServiceOfferDto(
-                    id = offer.id,
-                    requestId = offer.requestId,
-                    craftsmanId = session.userId.takeIf { it.length == 36 },
-                    craftsmanName = offer.craftsmanName,
-                    craftsmanPhone = offer.craftsmanPhone,
-                    craftsmanRating = offer.craftsmanRating,
-                    completedJobs = offer.completedJobs,
-                    specialty = offer.specialty,
-                    offeredPrice = offer.offeredPrice,
-                    etaMinutes = offer.etaMinutes,
-                    distanceKm = offer.distanceKm,
-                    note = offer.note,
-                    status = offer.status
-                )
-            )
-        }.onFailure { Log.w(TAG, "Supabase create offer failed", it) }
-    }
-
-    private suspend fun patchOfferInSupabase(offerId: String, patch: SupabaseOfferPatchDto) {
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
-        val session = prefs.userSessionFlow.first()
-        val token = session.supabaseAccessToken ?: return
-        runCatching {
-            api.patchOffer(
-                apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
-                idFilter = "eq.$offerId",
-                patch = patch
-            )
-        }.onFailure { Log.w(TAG, "Supabase patch offer failed", it) }
+    suspend fun logoutAccount() {
+        supabaseSessionManager?.signOut()
+        prefs.logoutAccount()
     }
 
     private fun ServiceRequest.toEntity() = ServiceRequestEntity(

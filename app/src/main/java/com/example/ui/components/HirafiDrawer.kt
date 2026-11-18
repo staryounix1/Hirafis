@@ -310,13 +310,13 @@ fun HirafiDrawerContent(
                     }
                 }
 
-                if (session.authProvider == "google") {
+                if (session.isSupabaseAuthenticated) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = VerifiedEmeraldSoft,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("firestore_connected_status_pill")
+                            .testTag("supabase_connected_status_pill")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -330,7 +330,7 @@ fun HirafiDrawerContent(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "متصل بقاعدة بيانات Firestore ✓",
+                                text = "متصل بقاعدة بيانات Supabase ✓",
                                 color = VerifiedEmerald,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp

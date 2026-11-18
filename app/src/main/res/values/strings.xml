@@ -9,4 +9,5 @@
     <string name="action_counter_offer">مفاوضة</string>
     <string name="action_cancel_request">إلغاء الطلب</string>
     <string name="currency_dh">درهم</string>
+    <string name="default_web_client_id" translatable="false">466578892927-drj90eel600vam8k9a4u1uecf3de90bv.apps.googleusercontent.com</string>
 </resources>

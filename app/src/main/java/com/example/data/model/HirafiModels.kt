@@ -305,10 +305,12 @@ data class UserSession(
     val fcmToken: String = "",
     val isSuspended: Boolean = false,
     val supabaseEmail: String? = null,
-    val supabaseAccessToken: String? = null
+    val supabaseAccessToken: String? = null,
+    val supabaseRefreshToken: String? = null,
+    val supabaseExpiresAtMillis: Long = 0L
 ) {
     val isSupabaseAuthenticated: Boolean
-        get() = !supabaseAccessToken.isNullOrBlank()
+        get() = !supabaseAccessToken.isNullOrBlank() && userId.isNotBlank() && userId != "local_user"
 
     val isCraftsmanVerified: Boolean
         get() = role == UserRole.CRAFTSMAN && verificationStatus == IdentityVerificationStatus.VERIFIED

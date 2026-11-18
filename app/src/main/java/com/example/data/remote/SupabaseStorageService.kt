@@ -5,28 +5,26 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.storage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
-class FirebaseCloudStorageService(
+class SupabaseStorageService(
     private val context: Context,
-    private val storage: FirebaseStorage = Firebase.storage,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val sessionManager: SupabaseSessionManager
 ) {
-    companion object {
-        private const val TAG = "HirafiCloudStorage"
-        private const val MAX_DIMENSION_PX = 1080
-        private const val JPEG_QUALITY = 82
-    }
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .build()
 
     suspend fun uploadAvatar(localUri: String): Result<String> =
         uploadCompressedImage(
@@ -62,22 +60,45 @@ class FirebaseCloudStorageService(
         ) {
             return Result.success(trimmed)
         }
-        val uid = auth.currentUser?.uid
+        if (!SupabaseConfig.isConfigured) {
+            return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
+        }
+        val uid = sessionManager.currentUidOrNull
             ?: return Result.failure(IllegalStateException("يجب تسجيل الدخول أولاً لرفع الصور"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت صلاحية الجلسة، يرجى إعادة تسجيل الدخول"))
 
         return try {
             val bytes = withContext(Dispatchers.IO) {
                 compressImageToJpegBytes(Uri.parse(trimmed))
             } ?: return Result.failure(IllegalArgumentException("تعذر قراءة الصورة المختارة من الجهاز"))
 
-            val ref = storage.reference.child(remotePathBuilder(uid))
-            ref.putBytes(bytes).await()
-            val downloadUrl = ref.downloadUrl.await().toString()
-            Result.success(downloadUrl)
+            val objectPath = remotePathBuilder(uid)
+            val uploadUrl = SupabaseConfig.objectUploadUrl(objectPath)
+            val req = Request.Builder()
+                .url(uploadUrl)
+                .post(bytes.toRequestBody("image/jpeg".toMediaType()))
+                .header("apikey", SupabaseConfig.anonKey)
+                .header("Authorization", bearer)
+                .header("x-upsert", "true")
+                .build()
+
+            val response = withContext(Dispatchers.IO) {
+                httpClient.newCall(req).execute()
+            }
+            response.use { res ->
+                if (res.isSuccessful) {
+                    Result.success(SupabaseConfig.publicMediaUrl(objectPath))
+                } else {
+                    val errText = runCatching { res.body?.string() }.getOrNull().orEmpty()
+                    Log.w(TAG, "Supabase Storage upload failed (${res.code}): $errText")
+                    Result.failure(IllegalStateException("تعذر رفع الصورة إلى Supabase Storage (${res.code})"))
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Firebase Storage upload failed: ${e.message}", e)
+            Log.w(TAG, "Supabase Storage upload error: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -119,5 +140,11 @@ class FirebaseCloudStorageService(
             scaled.recycle()
             baos.toByteArray()
         }
+    }
+
+    companion object {
+        private const val TAG = "SupabaseStorage"
+        private const val MAX_DIMENSION_PX = 1080
+        private const val JPEG_QUALITY = 82
     }
 }

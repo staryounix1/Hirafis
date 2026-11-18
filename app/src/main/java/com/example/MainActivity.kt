@@ -34,7 +34,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -47,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -55,16 +55,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.credentials.CredentialManager
 import com.example.data.local.HirafiDatabase
 import com.example.data.local.UserPreferencesDataStore
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.UserRole
-import com.example.data.remote.FirebaseCloudStorageService
-import com.example.data.remote.FirestoreAdminRepository
-import com.example.data.remote.FirestoreMarketplaceRepository
-import com.example.data.remote.FirestoreUserProfileRepository
+import com.example.data.remote.SupabaseAdminRepository
+import com.example.data.remote.SupabaseMarketplaceRepository
+import com.example.data.remote.SupabaseSessionManager
+import com.example.data.remote.SupabaseStorageService
+import com.example.data.remote.SupabaseUserProfileRepository
 import com.example.data.repository.HirafiRepository
 import com.example.notifications.HirafiNotificationHelper
 import com.example.ui.auth.GoogleAuthHelper
@@ -82,9 +82,6 @@ import com.example.ui.theme.HirafiTheme
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -101,17 +98,19 @@ class MainActivity : ComponentActivity() {
 
         val db = HirafiDatabase.getInstance(applicationContext)
         val prefs = UserPreferencesDataStore(applicationContext)
-        val firestoreUserRepo = FirestoreUserProfileRepository(applicationContext)
-        val firestoreMarketplaceRepo = FirestoreMarketplaceRepository(applicationContext)
-        val firestoreAdminRepo = FirestoreAdminRepository(applicationContext)
-        val cloudStorageService = FirebaseCloudStorageService(applicationContext)
+        val supabaseSessionManager = SupabaseSessionManager(prefs)
+        val supabaseUserRepo = SupabaseUserProfileRepository(supabaseSessionManager)
+        val supabaseMarketplaceRepo = SupabaseMarketplaceRepository(supabaseSessionManager)
+        val supabaseAdminRepo = SupabaseAdminRepository(supabaseSessionManager)
+        val supabaseStorageService = SupabaseStorageService(applicationContext, supabaseSessionManager)
         val repository = HirafiRepository(
             dao = db.hirafiDao(),
             prefs = prefs,
-            firestoreUserRepo = firestoreUserRepo,
-            firestoreMarketplaceRepo = firestoreMarketplaceRepo,
-            firestoreAdminRepo = firestoreAdminRepo,
-            cloudStorageService = cloudStorageService
+            supabaseSessionManager = supabaseSessionManager,
+            supabaseUserRepo = supabaseUserRepo,
+            supabaseMarketplaceRepo = supabaseMarketplaceRepo,
+            supabaseAdminRepo = supabaseAdminRepo,
+            supabaseStorageService = supabaseStorageService
         )
 
         setContent {
@@ -134,18 +133,10 @@ fun HirafiAppRoot(repository: HirafiRepository) {
     )
 
     val session by viewModel.userSession.collectAsStateWithLifecycle()
+    val supabaseAuth by viewModel.supabaseAuthState.collectAsStateWithLifecycle()
     val authUiState by viewModel.authUiState.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val biddingEvent by biddingViewModel.statusEvent.collectAsStateWithLifecycle()
-
-    var firebaseUser by remember { mutableStateOf(Firebase.auth.currentUser) }
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            firebaseUser = auth.currentUser
-        }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose { Firebase.auth.removeAuthStateListener(listener) }
-    }
 
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -156,17 +147,7 @@ fun HirafiAppRoot(repository: HirafiRepository) {
     var showCityDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        viewModel.clearLegacyLocalSessionIfNeeded()
-        val credManager = CredentialManager.create(context)
-        GoogleAuthHelper.attemptAutoSignIn(
-            context = context,
-            credentialManager = credManager,
-            scope = scope,
-            onAuthSuccess = { account ->
-                viewModel.restoreExistingGoogleProfile(account.uid, account.email)
-            },
-            onUnauthenticated = {}
-        )
+        viewModel.restoreSupabaseSession()
     }
 
     LaunchedEffect(snackbarMessage) {
@@ -181,10 +162,9 @@ fun HirafiAppRoot(repository: HirafiRepository) {
         biddingViewModel.consumeStatusEvent()
     }
 
-    val isCloudSessionReady = firebaseUser != null &&
+    val isCloudSessionReady = supabaseAuth != null &&
         session.isRoleLocked &&
-        session.authProvider == "google" &&
-        session.userId == firebaseUser?.uid
+        session.userId == supabaseAuth?.uid
 
     var askedNotificationPermission by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -243,12 +223,25 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                 RoleRegistrationScreen(
                     initialSession = session,
                     isCloudSaving = authUiState.isLoading,
-                    currentFirebaseUid = firebaseUser?.uid,
-                    currentFirebaseEmail = firebaseUser?.email,
-                    currentFirebaseDisplayName = firebaseUser?.displayName,
+                    currentSupabaseUid = supabaseAuth?.uid,
+                    currentSupabaseEmail = supabaseAuth?.email,
+                    currentSupabaseDisplayName = supabaseAuth?.displayName,
+                    onEmailSignUp = { email, password, fullName, city, role, specialtyId ->
+                        viewModel.signUpSupabaseEmail(
+                            email = email,
+                            password = password,
+                            fullName = fullName,
+                            city = city,
+                            preferredRole = role,
+                            preferredSpecialtyId = specialtyId
+                        )
+                    },
+                    onEmailSignIn = { email, password ->
+                        viewModel.signInSupabaseEmail(email, password)
+                    },
                     onGoogleAuthSuccess = { account, preferredDisplayName, city, role, specialtyId ->
                         viewModel.completeGoogleSignIn(
-                            uid = account.uid,
+                            idToken = account.idToken,
                             displayName = account.displayName,
                             preferredDisplayName = preferredDisplayName,
                             email = account.email,
@@ -257,7 +250,7 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                             preferredSpecialtyId = specialtyId
                         )
                     },
-                    onSwitchGoogleAccount = {
+                    onSwitchAccount = {
                         viewModel.stopCloudListenersBeforeSignOut()
                         val credManager = CredentialManager.create(context)
                         GoogleAuthHelper.signOut(credManager, scope) {
@@ -267,78 +260,78 @@ fun HirafiAppRoot(repository: HirafiRepository) {
                     onShowError = { message -> viewModel.showMessage(message) }
                 )
             } else {
-                key(firebaseUser!!.uid) {
-                NavHost(
-                    navController = navController,
-                    startDestination = "home",
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    composable("home") {
-                        when (session.role) {
-                            UserRole.ADMIN -> {
-                                AdminDashboardScreen(
-                                    viewModel = viewModel,
-                                    onOpenDrawer = { scope.launch { drawerState.open() } }
-                                )
-                            }
-                            UserRole.CLIENT -> {
-                                ClientHomeScreen(
-                                    viewModel = viewModel,
-                                    biddingViewModel = biddingViewModel,
-                                    onOpenDrawer = { scope.launch { drawerState.open() } },
-                                    onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
-                                    onOpenSafety = { navController.navigate("safety") }
-                                )
-                            }
-                            UserRole.CRAFTSMAN -> {
-                                CraftsmanDashboardScreen(
-                                    viewModel = viewModel,
-                                    biddingViewModel = biddingViewModel,
-                                    onOpenDrawer = { scope.launch { drawerState.open() } },
-                                    onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
-                                )
+                key(supabaseAuth!!.uid) {
+                    NavHost(
+                        navController = navController,
+                        startDestination = "home",
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        composable("home") {
+                            when (session.role) {
+                                UserRole.ADMIN -> {
+                                    AdminDashboardScreen(
+                                        viewModel = viewModel,
+                                        onOpenDrawer = { scope.launch { drawerState.open() } }
+                                    )
+                                }
+                                UserRole.CLIENT -> {
+                                    ClientHomeScreen(
+                                        viewModel = viewModel,
+                                        biddingViewModel = biddingViewModel,
+                                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                                        onOpenChat = { reqId -> navController.navigate("chat/$reqId") },
+                                        onOpenSafety = { navController.navigate("safety") }
+                                    )
+                                }
+                                UserRole.CRAFTSMAN -> {
+                                    CraftsmanDashboardScreen(
+                                        viewModel = viewModel,
+                                        biddingViewModel = biddingViewModel,
+                                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                                        onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                                    )
+                                }
                             }
                         }
+
+                        composable("orders") {
+                            OrdersHistoryScreen(
+                                viewModel = viewModel,
+                                onBack = { navController.popBackStack() },
+                                onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
+                            )
+                        }
+
+                        composable("profile") {
+                            ProfileScreen(
+                                viewModel = viewModel,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable("safety") {
+                            SafetyScreen(onBack = { navController.popBackStack() })
+                        }
+
+                        composable("verification") {
+                            CraftsmanVerificationScreen(
+                                viewModel = viewModel,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(
+                            route = "chat/{requestId}",
+                            arguments = listOf(navArgument("requestId") { type = NavType.StringType })
+                        ) { entry ->
+                            val requestId = entry.arguments?.getString("requestId") ?: return@composable
+                            ChatScreen(
+                                requestId = requestId,
+                                viewModel = viewModel,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
                     }
-
-                composable("orders") {
-                    OrdersHistoryScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onOpenChat = { reqId -> navController.navigate("chat/$reqId") }
-                    )
-                }
-
-                composable("profile") {
-                    ProfileScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() }
-                    )
-                }
-
-                composable("safety") {
-                    SafetyScreen(onBack = { navController.popBackStack() })
-                }
-
-                composable("verification") {
-                    CraftsmanVerificationScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() }
-                    )
-                }
-
-                    composable(
-                        route = "chat/{requestId}",
-                        arguments = listOf(navArgument("requestId") { type = NavType.StringType })
-                    ) { entry ->
-                        val requestId = entry.arguments?.getString("requestId") ?: return@composable
-                        ChatScreen(
-                            requestId = requestId,
-                            viewModel = viewModel,
-                            onBack = { navController.popBackStack() }
-                        )
-                    }
-                }
                 }
             }
         }

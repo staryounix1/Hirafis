@@ -14,8 +14,6 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
-import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.tasks.await
 
 object HirafiNotificationHelper {
     private const val TAG = "HirafiNotifications"
@@ -96,15 +94,6 @@ object HirafiNotificationHelper {
             NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         }.onFailure { err ->
             Log.w(TAG, "Unable to show notification: ${err.message}")
-        }
-    }
-
-    suspend fun fetchFcmTokenOrNull(): String? {
-        return try {
-            FirebaseMessaging.getInstance().token.await()?.takeIf { it.isNotBlank() }
-        } catch (e: Exception) {
-            Log.w(TAG, "FCM token retrieval skipped: ${e.message}")
-            null
         }
     }
 }

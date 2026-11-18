@@ -25,18 +25,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
-import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.LocationCity
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -44,7 +49,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -68,21 +75,26 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
-import com.example.data.model.AdminAuthorizationPolicy
 import com.example.data.model.HirafiCategories
 import com.example.data.model.LoginValidator
 import com.example.data.model.MoroccanLocations
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.data.remote.SupabaseConfig
 import com.example.ui.auth.GoogleAuthAccount
 import com.example.ui.auth.GoogleAuthHelper
 import com.example.ui.theme.ElectricLime
 import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
+import com.example.ui.theme.UrgentCoral
+import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
 
@@ -90,9 +102,18 @@ import com.example.ui.theme.VerifiedEmeraldSoft
 fun RoleRegistrationScreen(
     initialSession: UserSession,
     isCloudSaving: Boolean = false,
-    currentFirebaseUid: String? = null,
-    currentFirebaseEmail: String? = null,
-    currentFirebaseDisplayName: String? = null,
+    currentSupabaseUid: String? = null,
+    currentSupabaseEmail: String? = null,
+    currentSupabaseDisplayName: String? = null,
+    onEmailSignUp: (
+        email: String,
+        password: String,
+        fullName: String,
+        city: String,
+        role: UserRole,
+        specialtyId: String?
+    ) -> Unit,
+    onEmailSignIn: (email: String, password: String) -> Unit,
     onGoogleAuthSuccess: (
         account: GoogleAuthAccount,
         preferredDisplayName: String,
@@ -100,29 +121,43 @@ fun RoleRegistrationScreen(
         role: UserRole,
         specialtyId: String?
     ) -> Unit,
-    onSwitchGoogleAccount: (() -> Unit)? = null,
+    onSwitchAccount: (() -> Unit)? = null,
     onShowError: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
+    var isSignUpMode by remember { mutableStateOf(true) }
     var selectedRole by remember { mutableStateOf(UserRole.CLIENT) }
     var selectedSpecialtyId by remember { mutableStateOf(initialSession.craftsmanSpecialtyId) }
-    var fullName by remember(currentFirebaseUid) {
+    var fullName by remember(currentSupabaseUid) {
         mutableStateOf(
             when {
                 initialSession.isRoleLocked -> initialSession.fullName
-                !currentFirebaseDisplayName.isNullOrBlank() -> currentFirebaseDisplayName
+                !currentSupabaseDisplayName.isNullOrBlank() -> currentSupabaseDisplayName
                 else -> ""
             }
         )
     }
+    var email by remember(currentSupabaseUid) {
+        mutableStateOf(currentSupabaseEmail.orEmpty())
+    }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
     var selectedCity by remember { mutableStateOf(initialSession.city) }
     var isGoogleLoading by remember { mutableStateOf(false) }
 
     val isBusy = isGoogleLoading || isCloudSaving
     val isNameValid = LoginValidator.isValidFullName(fullName)
+    val isEmailValid = LoginValidator.isValidEmail(email)
+    val isPasswordValid = LoginValidator.isValidPassword(password)
+    val chosenSpecialty = if (selectedRole == UserRole.CRAFTSMAN) selectedSpecialtyId else null
+    val roleLabel = if (selectedRole == UserRole.CLIENT) {
+        "زبون"
+    } else {
+        "حرفي (${HirafiCategories.byId(selectedSpecialtyId).nameAr})"
+    }
 
     Column(
         modifier = Modifier
@@ -171,7 +206,7 @@ fun RoleRegistrationScreen(
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "مربوط مباشرة بقاعدة بيانات Firebase لتلاقي الزبائن والحرفيين",
+                            text = "مربوط مباشرة بـ Supabase لتلاقي الزبائن والحرفيين",
                             color = ElectricLime,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -185,7 +220,7 @@ fun RoleRegistrationScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "تنبيه: نوع الحساب (زبون أو حرفي) يُحفظ ويُقفل لكل حساب غوغل في قاعدة البيانات. لاختبار الزبون والحرفي معاً، سجّل بحساب غوغل مختلف لكل دور.",
+                        text = "تنبيه: نوع الحساب (زبون أو حرفي) يُحفظ ويُقفل لكل حساب في قاعدة بيانات Supabase. يمكنك التسجيل بالبريد الإلكتروني أو عبر حساب غوغل.",
                         color = StarAmber,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -195,7 +230,30 @@ fun RoleRegistrationScreen(
             }
         }
 
-        if (!currentFirebaseUid.isNullOrBlank()) {
+        if (!SupabaseConfig.isConfigured) {
+            Surface(
+                color = UrgentCoralSoft,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, UrgentCoral.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(12.dp)
+                ) {
+                    Icon(Icons.Rounded.Warning, contentDescription = null, tint = UrgentCoral)
+                    Text(
+                        text = "إعدادات Supabase غير مضافة بعد. أضف SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets داخل AI Studio ثم أعد تشغيل التطبيق.",
+                        color = UrgentCoral,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (!currentSupabaseUid.isNullOrBlank()) {
             Surface(
                 color = VerifiedEmeraldSoft,
                 shape = RoundedCornerShape(16.dp),
@@ -215,14 +273,14 @@ fun RoleRegistrationScreen(
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "تم التحقق من حساب غوغل بنجاح",
+                            text = "تم التحقق من الجلسة السحابية في Supabase",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = VerifiedEmerald
                         )
-                        if (!currentFirebaseEmail.isNullOrBlank()) {
+                        if (!currentSupabaseEmail.isNullOrBlank()) {
                             Text(
-                                text = currentFirebaseEmail,
+                                text = currentSupabaseEmail,
                                 fontSize = 12.sp,
                                 color = ObsidianBlack
                             )
@@ -232,106 +290,200 @@ fun RoleRegistrationScreen(
             }
         }
 
-        // 1. Account Role Selection (Client vs Single-Profession Craftsman)
-        Text(
-            text = "1. اختر نوع الحساب",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.ExtraBold
-        )
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            RoleSelectionCard(
-                title = "زبون",
-                subtitle = "طلب الخدمات",
-                icon = Icons.Rounded.Person,
-                selected = selectedRole == UserRole.CLIENT,
-                onClick = { selectedRole = UserRole.CLIENT },
-                tag = "register_role_client",
-                modifier = Modifier.weight(1f)
-            )
-            RoleSelectionCard(
-                title = "حرفي",
-                subtitle = "مهنة واحدة",
-                icon = Icons.Rounded.Build,
-                selected = selectedRole == UserRole.CRAFTSMAN,
-                onClick = { selectedRole = UserRole.CRAFTSMAN },
-                tag = "register_role_craftsman",
-                modifier = Modifier.weight(1f)
-            )
-            RoleSelectionCard(
-                title = "أدمين",
-                subtitle = "إدارة المنصة",
-                icon = Icons.Rounded.AdminPanelSettings,
-                selected = selectedRole == UserRole.ADMIN,
-                onClick = { selectedRole = UserRole.ADMIN },
-                tag = "register_role_admin",
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        AnimatedVisibility(visible = selectedRole == UserRole.ADMIN) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = ElectricLimeSoft,
-                border = BorderStroke(1.dp, ObsidianBlack.copy(alpha = 0.25f)),
+        // Auth Mode Switcher: Create Account vs Sign In
+        if (currentSupabaseUid.isNullOrBlank()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = "دخول الأدمين متاح لبريد الإدارة المعتمد (${AdminAuthorizationPolicy.BOOTSTRAP_ADMIN_EMAIL}) أو البريد المُضاف من لوحة الأدمين.",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = ObsidianBlack,
-                    modifier = Modifier.padding(12.dp)
-                )
+                Surface(
+                    color = if (isSignUpMode) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, if (isSignUpMode) ElectricLime else MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { isSignUpMode = true }
+                        .testTag("auth_mode_signup")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "إنشاء حساب جديد",
+                            color = if (isSignUpMode) ElectricLime else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+                Surface(
+                    color = if (!isSignUpMode) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, if (!isSignUpMode) ElectricLime else MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { isSignUpMode = false }
+                        .testTag("auth_mode_signin")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "تسجيل الدخول",
+                            color = if (!isSignUpMode) ElectricLime else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
             }
         }
 
-        AnimatedVisibility(visible = selectedRole == UserRole.CRAFTSMAN) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "اختر مهنتك الوحيدة الدائمة:",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = VerifiedEmerald
+        // Role & Profile Fields (only when creating a new account or finishing an incomplete Supabase session)
+        if (isSignUpMode || !currentSupabaseUid.isNullOrBlank()) {
+            Text(
+                text = "1. اختر نوع الحساب",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold
+            )
+
+            // IMPORTANT: Strictly Client and Craftsman only — Admin is never shown here
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                RoleSelectionCard(
+                    title = "زبون",
+                    subtitle = "طلب الخدمات",
+                    icon = Icons.Rounded.Person,
+                    selected = selectedRole == UserRole.CLIENT,
+                    onClick = { selectedRole = UserRole.CLIENT },
+                    tag = "register_role_client",
+                    modifier = Modifier.weight(1f)
                 )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
-                ) {
-                    items(HirafiCategories.all, key = { it.id }) { category ->
-                        val isPicked = category.id == selectedSpecialtyId
-                        Surface(
-                            color = if (isPicked) ObsidianBlack else MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .border(
-                                    width = if (isPicked) 2.dp else 1.dp,
-                                    color = if (isPicked) ElectricLime else MaterialTheme.colorScheme.outline,
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .clip(RoundedCornerShape(16.dp))
-                                .clickable { selectedSpecialtyId = category.id }
-                                .testTag("register_specialty_${category.id}")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                RoleSelectionCard(
+                    title = "حرفي",
+                    subtitle = "مهنة واحدة دائمة",
+                    icon = Icons.Rounded.Build,
+                    selected = selectedRole == UserRole.CRAFTSMAN,
+                    onClick = { selectedRole = UserRole.CRAFTSMAN },
+                    tag = "register_role_craftsman",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            AnimatedVisibility(visible = selectedRole == UserRole.CRAFTSMAN) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "اختر مهنتك الوحيدة الدائمة:",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = VerifiedEmerald
+                    )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
+                    ) {
+                        items(HirafiCategories.all, key = { it.id }) { category ->
+                            val isPicked = category.id == selectedSpecialtyId
+                            Surface(
+                                color = if (isPicked) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .border(
+                                        width = if (isPicked) 2.dp else 1.dp,
+                                        color = if (isPicked) ElectricLime else MaterialTheme.colorScheme.outline,
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { selectedSpecialtyId = category.id }
+                                    .testTag("register_specialty_${category.id}")
                             ) {
-                                Icon(
-                                    imageVector = category.icon,
-                                    contentDescription = null,
-                                    tint = if (isPicked) ElectricLime else category.accentColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = category.nameAr,
-                                    color = if (isPicked) Color.White else MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = category.icon,
+                                        contentDescription = null,
+                                        tint = if (isPicked) ElectricLime else category.accentColor,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = category.nameAr,
+                                        color = if (isPicked) Color.White else MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "2. الاسم الظاهر والمدينة",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    OutlinedTextField(
+                        value = fullName,
+                        onValueChange = { if (it.length <= 80) fullName = it },
+                        label = {
+                            Text(
+                                if (selectedRole == UserRole.CRAFTSMAN)
+                                    "الاسم الظاهر للزبائن"
+                                else
+                                    "الاسم الكامل الظاهر للحرفيين"
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                if (selectedRole == UserRole.CRAFTSMAN)
+                                    "مثال: أحمد السباك"
+                                else
+                                    "مثال: يونس العلمي"
+                            )
+                        },
+                        leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
+                        trailingIcon = if (isNameValid) {
+                            { Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald) }
+                        } else null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("login_full_name_input")
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Rounded.LocationCity, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
+                            Text("المدينة:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(MoroccanLocations.cities) { cityName ->
+                                FilterChip(
+                                    selected = selectedCity == cityName,
+                                    onClick = { selectedCity = cityName },
+                                    label = { Text(cityName, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = ObsidianBlack,
+                                        selectedLabelColor = ElectricLime
+                                    )
                                 )
                             }
                         }
@@ -340,101 +492,170 @@ fun RoleRegistrationScreen(
             }
         }
 
-        // 2. Display Name & City Card
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "2. الاسم الظاهر والمدينة",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold
-                )
-
-                OutlinedTextField(
-                    value = fullName,
-                    onValueChange = { if (it.length <= 80) fullName = it },
-                    label = {
-                        Text(
-                            if (selectedRole == UserRole.CRAFTSMAN)
-                                "الاسم الظاهر للزبائن (اختياري)"
-                            else
-                                "الاسم الكامل الظاهر للحرفيين (اختياري)"
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            if (selectedRole == UserRole.CRAFTSMAN)
-                                "مثال: أحمد السباك (أو يُؤخذ من غوغل)"
-                            else
-                                "مثال: يونس العلمي (أو يُؤخذ من غوغل)"
-                        )
-                    },
-                    leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
-                    trailingIcon = if (isNameValid) {
-                        { Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald) }
-                    } else null,
-                    supportingText = {
-                        Text("سيتم حفظ هذا الاسم ودورك مباشرة في قاعدة بيانات Firestore.")
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("login_full_name_input")
-                )
-
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.Rounded.LocationCity, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
-                        Text("المدينة:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(MoroccanLocations.cities) { cityName ->
-                            FilterChip(
-                                selected = selectedCity == cityName,
-                                onClick = { selectedCity = cityName },
-                                label = { Text(cityName, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = ObsidianBlack,
-                                    selectedLabelColor = ElectricLime
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Primary Firebase Auth + Firestore Registration CTA
-        val roleLabel = when (selectedRole) {
-            UserRole.CLIENT -> "زبون"
-            UserRole.CRAFTSMAN -> "حرفي (${HirafiCategories.byId(selectedSpecialtyId).nameAr})"
-            UserRole.ADMIN -> "أدمين"
-        }
-
-        Button(
-            onClick = {
-                val chosenSpecialty = if (selectedRole == UserRole.CRAFTSMAN) selectedSpecialtyId else null
-                if (!currentFirebaseUid.isNullOrBlank()) {
+        // Complete existing Supabase session OR show Email/Password + Google auth
+        if (!currentSupabaseUid.isNullOrBlank()) {
+            Button(
+                onClick = {
                     onGoogleAuthSuccess(
                         GoogleAuthAccount(
-                            uid = currentFirebaseUid,
-                            displayName = currentFirebaseDisplayName.orEmpty(),
-                            email = currentFirebaseEmail.orEmpty()
+                            idToken = "",
+                            displayName = currentSupabaseDisplayName.orEmpty(),
+                            email = currentSupabaseEmail.orEmpty()
                         ),
                         fullName.trim(),
                         selectedCity,
                         selectedRole,
                         chosenSpecialty
                     )
+                },
+                enabled = !isBusy,
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ElectricLime,
+                    contentColor = ObsidianBlack
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("google_sign_in_button")
+            ) {
+                if (isBusy) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("جاري حفظ الحساب في Supabase...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 } else {
+                    Icon(Icons.Rounded.CloudDone, contentDescription = null, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("تأكيد التسجيل كـ $roleLabel في Supabase", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+                }
+            }
+
+            if (onSwitchAccount != null) {
+                OutlinedButton(
+                    onClick = onSwitchAccount,
+                    enabled = !isBusy,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("switch_google_account_button")
+                ) {
+                    Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("استخدام حساب آخر", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+        } else {
+            // Email + Password Form Card
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = if (isSignUpMode) "3. بيانات الدخول عبر Supabase" else "تسجيل الدخول لحسابك",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { if (it.length <= 120) email = it },
+                        label = { Text("البريد الإلكتروني") },
+                        placeholder = { Text("example@gmail.com") },
+                        leadingIcon = { Icon(Icons.Rounded.Email, contentDescription = null) },
+                        trailingIcon = if (isEmailValid) {
+                            { Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald) }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("email_input")
+                    )
+
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { if (it.length <= 72) password = it },
+                        label = { Text("كلمة المرور") },
+                        placeholder = { Text("6 أحرف على الأقل") },
+                        leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(
+                                    imageVector = if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                    contentDescription = if (showPassword) "إخفاء كلمة المرور" else "إظهار كلمة المرور"
+                                )
+                            }
+                        },
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("password_input")
+                    )
+
+                    Button(
+                        onClick = {
+                            if (isSignUpMode) {
+                                onEmailSignUp(
+                                    email.trim(),
+                                    password,
+                                    fullName.trim(),
+                                    selectedCity,
+                                    selectedRole,
+                                    chosenSpecialty
+                                )
+                            } else {
+                                onEmailSignIn(email.trim(), password)
+                            }
+                        },
+                        enabled = !isBusy && isEmailValid && (if (isSignUpMode) isPasswordValid else password.isNotBlank()),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricLime,
+                            contentColor = ObsidianBlack
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp)
+                            .testTag("email_auth_submit_button")
+                    ) {
+                        if (isCloudSaving) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text("جاري الاتصال بـ Supabase...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        } else {
+                            Text(
+                                text = if (isSignUpMode) "إنشاء حساب $roleLabel" else "تسجيل الدخول",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                HorizontalDivider(modifier = Modifier.weight(1f))
+                Text("أو", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                HorizontalDivider(modifier = Modifier.weight(1f))
+            }
+
+            OutlinedButton(
+                onClick = {
                     isGoogleLoading = true
                     GoogleAuthHelper.launchGoogleSignIn(
                         context = context,
@@ -458,63 +679,32 @@ fun RoleRegistrationScreen(
                             isGoogleLoading = false
                         }
                     )
-                }
-            },
-            enabled = !isBusy,
-            shape = RoundedCornerShape(18.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = ElectricLime,
-                contentColor = ObsidianBlack
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .testTag("google_sign_in_button")
-        ) {
-            if (isBusy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = ObsidianBlack,
-                    strokeWidth = 2.5.dp
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = if (isCloudSaving) "جاري حفظ الحساب في قاعدة البيانات..." else "جاري الاتصال بحساب غوغل...",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-            } else if (!currentFirebaseUid.isNullOrBlank()) {
-                Icon(Icons.Rounded.CloudDone, contentDescription = null, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "تأكيد التسجيل كـ $roleLabel في قاعدة البيانات",
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp
-                )
-            } else {
-                GoogleLogoBadge(modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "إنشاء حساب $roleLabel عبر غوغل",
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp
-                )
-            }
-        }
-
-        if (!currentFirebaseUid.isNullOrBlank() && onSwitchGoogleAccount != null) {
-            OutlinedButton(
-                onClick = onSwitchGoogleAccount,
+                },
                 enabled = !isBusy,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.5.dp, ObsidianBlack),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = ObsidianBlack
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("switch_google_account_button")
+                    .height(54.dp)
+                    .testTag("google_sign_in_button")
             ) {
-                Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("استخدام حساب غوغل آخر", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                if (isGoogleLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("جاري الاتصال بحساب غوغل...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                } else {
+                    GoogleLogoBadge(modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = if (isSignUpMode) "المتابعة كـ $roleLabel عبر غوغل" else "تسجيل الدخول عبر غوغل",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp
+                    )
+                }
             }
         }
 

@@ -35,22 +35,18 @@ import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.data.model.VerificationSubmission
 import com.example.data.remote.MapRoutingService
+import com.example.data.remote.SupabaseAuthState
 import com.example.data.remote.SupabaseConfig
 import com.example.data.repository.HirafiRepository
 import com.example.notifications.HirafiNotificationHelper
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
@@ -222,11 +218,13 @@ class HirafiViewModel(
     private var geocodeJob: Job? = null
     private var trackingJob: Job? = null
     private var gpsStreamJob: Job? = null
-    private var firestoreSyncJob: Job? = null
+    private var cloudSyncJob: Job? = null
     private var activeTrackedRequestKey: String? = null
     private var lastCraftsmenCenter: Pair<Double, Double>? = null
 
     private val _previewedCraftsmanId = MutableStateFlow<String?>(null)
+
+    val supabaseAuthState: StateFlow<SupabaseAuthState?> = repository.supabaseAuthStateFlow
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val myPortfolio: StateFlow<List<PortfolioItem>> = userSession
@@ -245,16 +243,6 @@ class HirafiViewModel(
             if (id.isNullOrBlank()) flowOf(emptyList()) else repository.observePortfolioForCraftsman(id)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
-
-    private val firebaseUidFlow: Flow<String?> = callbackFlow {
-        val auth = Firebase.auth
-        val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
-            trySend(firebaseAuth.currentUser?.uid)
-        }
-        auth.addAuthStateListener(listener)
-        trySend(auth.currentUser?.uid)
-        awaitClose { auth.removeAuthStateListener(listener) }
-    }
 
     val tickerMillis: StateFlow<Long> = flow {
         while (true) {
@@ -366,8 +354,8 @@ class HirafiViewModel(
 
     init {
         viewModelScope.launch {
-            combine(firebaseUidFlow, _appRuntimeConfig) { uid, config ->
-                (uid != null) to config.productionMode
+            combine(supabaseAuthState, _appRuntimeConfig) { auth, config ->
+                (auth != null) to config.productionMode
             }.distinctUntilChanged().collect { (isSignedIn, productionMode) ->
                 if (isSignedIn || productionMode) {
                     repository.clearSeededRequests()
@@ -377,19 +365,19 @@ class HirafiViewModel(
             }
         }
         viewModelScope.launch {
-            combine(firebaseUidFlow, userSession) { uid, session ->
-                if (uid != null && session.isRoleLocked && session.authProvider == "google") {
-                    Triple(uid, session.role, session.craftsmanSpecialtyId)
+            combine(supabaseAuthState, userSession) { auth, session ->
+                if (auth != null && session.isRoleLocked && session.userId == auth.uid) {
+                    Triple(auth.uid, session.role, session.craftsmanSpecialtyId)
                 } else {
                     null
                 }
             }.distinctUntilChanged().collect { active ->
                 if (active == null) {
-                    firestoreSyncJob?.cancel()
-                    firestoreSyncJob = null
+                    cloudSyncJob?.cancel()
+                    cloudSyncJob = null
                     _liveCloudCraftsmen.value = emptyList()
                 } else {
-                    startFirestoreSync(active.second, active.third)
+                    startSupabaseSync(active.second, active.third)
                 }
             }
         }
@@ -625,9 +613,9 @@ class HirafiViewModel(
         when (req.status) {
             RequestStatus.ACCEPTED -> {
                 val assignedId = req.assignedCraftsmanId
-                val isFirestoreCraftsman = !assignedId.isNullOrBlank() &&
+                val isCloudCraftsman = !assignedId.isNullOrBlank() &&
                     !assignedId.startsWith("c_") &&
-                    repository.isFirestoreAuthenticated
+                    repository.isSupabaseAuthenticated
                 val remotePos = assignedId?.let { repository.fetchAssignedCraftsmanLocation(it) }
                 val cLat = remotePos?.first ?: pts.first().first
                 val cLng = remotePos?.second ?: pts.first().second
@@ -641,8 +629,8 @@ class HirafiViewModel(
                     remainingDistanceKm = activeRoute.distanceKm,
                     etaMinutes = activeRoute.durationMinutes
                 )
-                if (isFirestoreCraftsman) {
-                    repository.observeFirestoreRequestLiveCoords(req.id).collect { liveCoord ->
+                if (isCloudCraftsman) {
+                    repository.observeCloudRequestLiveCoords(req.id).collect { liveCoord ->
                         if (liveCoord != null) {
                             val updatedRoute = MapRoutingService.fetchDrivingRoute(
                                 liveCoord.first, liveCoord.second, req.lat, req.lng
@@ -660,12 +648,11 @@ class HirafiViewModel(
             }
             RequestStatus.EN_ROUTE -> {
                 val assignedId = req.assignedCraftsmanId
-                val isFirestoreCraftsman = !assignedId.isNullOrBlank() &&
+                val isCloudCraftsman = !assignedId.isNullOrBlank() &&
                     !assignedId.startsWith("c_") &&
-                    repository.isFirestoreAuthenticated
+                    repository.isSupabaseAuthenticated
                 val isRemoteCraftsmanUuid = assignedId != null && assignedId.length == 36
-                if (isFirestoreCraftsman) {
-                    // Seed initial route before live Firestore GPS snapshots arrive
+                if (isCloudCraftsman) {
                     _liveRoute.value = LiveRouteState(
                         routePoints = pts,
                         craftsmanLat = pts.first().first,
@@ -673,7 +660,7 @@ class HirafiViewModel(
                         remainingDistanceKm = route.distanceKm,
                         etaMinutes = route.durationMinutes
                     )
-                    repository.observeFirestoreRequestLiveCoords(req.id).collect { liveCoord ->
+                    repository.observeCloudRequestLiveCoords(req.id).collect { liveCoord ->
                         if (liveCoord != null) {
                             val dist = MapRoutingService.haversineKm(liveCoord.first, liveCoord.second, req.lat, req.lng)
                             val updatedRoute = MapRoutingService.fetchDrivingRoute(liveCoord.first, liveCoord.second, req.lat, req.lng)
@@ -1129,56 +1116,9 @@ class HirafiViewModel(
         }
     }
 
-    fun completeGoogleSignIn(
-        uid: String,
-        displayName: String,
-        preferredDisplayName: String = "",
-        email: String,
-        city: String,
-        preferredRole: UserRole,
-        preferredSpecialtyId: String?
-    ) {
+    fun restoreSupabaseSession() {
         viewModelScope.launch {
-            _authUiState.value = AuthUiState(isLoading = true)
-            val result = repository.completeGoogleAccountLogin(
-                uid = uid,
-                displayName = displayName,
-                preferredDisplayName = preferredDisplayName,
-                email = email,
-                city = city,
-                preferredRole = preferredRole,
-                preferredSpecialtyId = preferredSpecialtyId
-            )
-            result.onSuccess { session ->
-                _authUiState.value = AuthUiState(isLoading = false)
-                val coord = MoroccanLocations.coordForCity(session.city)
-                selectNeighborhood(session.city, coord.lat, coord.lng)
-                if (session.role != preferredRole) {
-                    showMessage(
-                        "هذا الحساب مسجل مسبقاً كـ ${session.role.labelAr} (مقفل). لإنشاء حساب ${preferredRole.labelAr} جديد، استخدم حساب غوغل آخر."
-                    )
-                } else {
-                    showMessage(
-                        when (session.role) {
-                            UserRole.ADMIN ->
-                                "مرحباً ${session.fullName}! تم تسجيل دخولك كأدمين رسمي للمنصة ✓"
-                            UserRole.CRAFTSMAN ->
-                                "أهلاً ${session.fullName}! تم حفظ حسابك في قاعدة البيانات كحرفي (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
-                            UserRole.CLIENT ->
-                                "أهلاً ${session.fullName}! تم حفظ حسابك في قاعدة البيانات كزبون"
-                        }
-                    )
-                }
-            }.onFailure { err ->
-                _authUiState.value = AuthUiState(isLoading = false, message = err.message, isError = true)
-                showMessage(err.message ?: "تعذر حفظ الحساب في قاعدة البيانات السحابية")
-            }
-        }
-    }
-
-    fun restoreExistingGoogleProfile(uid: String, email: String) {
-        viewModelScope.launch {
-            val result = repository.restoreExistingGoogleProfileIfLocked(uid, email)
+            val result = repository.restoreSupabaseSession()
             result.onSuccess { restored ->
                 if (restored != null) {
                     val coord = MoroccanLocations.coordForCity(restored.city)
@@ -1188,12 +1128,112 @@ class HirafiViewModel(
         }
     }
 
-    fun clearLegacyLocalSessionIfNeeded() {
-        val current = userSession.value
-        if (Firebase.auth.currentUser == null && current.isRoleLocked && current.authProvider != "google") {
-            viewModelScope.launch {
-                repository.logoutAccount()
+    fun completeGoogleSignIn(
+        idToken: String,
+        displayName: String,
+        preferredDisplayName: String = "",
+        email: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?
+    ) {
+        viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
+            val result = repository.completeGoogleSupabaseLogin(
+                idToken = idToken,
+                fallbackDisplayName = displayName,
+                preferredDisplayName = preferredDisplayName,
+                fallbackEmail = email,
+                city = city,
+                preferredRole = preferredRole,
+                preferredSpecialtyId = preferredSpecialtyId
+            )
+            handleAuthResult(result, preferredRole)
+        }
+    }
+
+    fun signUpSupabaseEmail(
+        email: String,
+        password: String,
+        fullName: String,
+        city: String,
+        preferredRole: UserRole,
+        preferredSpecialtyId: String?
+    ) {
+        if (!LoginValidator.isValidEmail(email)) {
+            showMessage("يرجى إدخال بريد إلكتروني صحيح")
+            return
+        }
+        if (!LoginValidator.isValidPassword(password)) {
+            showMessage("يجب أن تتكون كلمة المرور من 6 أحرف على الأقل")
+            return
+        }
+        viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
+            val result = repository.signUpWithSupabaseEmailAccount(
+                email = email,
+                password = password,
+                fullName = fullName,
+                city = city,
+                preferredRole = preferredRole,
+                preferredSpecialtyId = preferredSpecialtyId
+            )
+            handleAuthResult(result, preferredRole)
+        }
+    }
+
+    fun signInSupabaseEmail(email: String, password: String) {
+        if (!LoginValidator.isValidEmail(email)) {
+            showMessage("يرجى إدخال بريد إلكتروني صحيح")
+            return
+        }
+        if (password.isBlank()) {
+            showMessage("يرجى إدخال كلمة المرور")
+            return
+        }
+        viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
+            val result = repository.signInWithSupabaseEmailAccount(email, password)
+            result.onSuccess { session ->
+                _authUiState.value = AuthUiState(isLoading = false)
+                val coord = MoroccanLocations.coordForCity(session.city)
+                selectNeighborhood(session.city, coord.lat, coord.lng)
+                when (session.role) {
+                    UserRole.ADMIN -> showMessage("مرحباً ${session.fullName}! تم تسجيل دخولك كأدمين رسمي للمنصة ✓")
+                    UserRole.CRAFTSMAN -> showMessage("مرحباً بعودتك ${session.fullName} (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})")
+                    UserRole.CLIENT -> showMessage("مرحباً بعودتك ${session.fullName}!")
+                }
+            }.onFailure { err ->
+                _authUiState.value = AuthUiState(isLoading = false, message = err.message, isError = true)
+                showMessage(err.message ?: "تعذر تسجيل الدخول في Supabase")
             }
+        }
+    }
+
+    private fun handleAuthResult(result: Result<UserSession>, preferredRole: UserRole) {
+        result.onSuccess { session ->
+            _authUiState.value = AuthUiState(isLoading = false)
+            val coord = MoroccanLocations.coordForCity(session.city)
+            selectNeighborhood(session.city, coord.lat, coord.lng)
+            when {
+                session.role == UserRole.ADMIN -> {
+                    showMessage("مرحباً ${session.fullName}! تم تسجيل دخولك كأدمين رسمي للمنصة ✓")
+                }
+                session.role != preferredRole -> {
+                    showMessage(
+                        "هذا الحساب مسجل مسبقاً كـ ${session.role.labelAr} (مقفل). لإنشاء حساب ${preferredRole.labelAr} جديد، استخدم بريداً مختلفاً."
+                    )
+                }
+                session.role == UserRole.CRAFTSMAN -> {
+                    showMessage("أهلاً ${session.fullName}! تم حفظ حسابك في Supabase كحرفي (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})")
+                }
+                else -> {
+                    showMessage("أهلاً ${session.fullName}! تم حفظ حسابك في Supabase كزبون")
+                }
+            }
+        }.onFailure { err ->
+            _authUiState.value = AuthUiState(isLoading = false, message = err.message, isError = true)
+            showMessage(err.message ?: "تعذر حفظ الحساب في Supabase")
         }
     }
 
@@ -1288,7 +1328,7 @@ class HirafiViewModel(
 
     fun loadCraftsmanPortfolio(craftsmanId: String) {
         _previewedCraftsmanId.value = craftsmanId
-        if (repository.isFirestoreAuthenticated && !craftsmanId.startsWith("c_")) {
+        if (repository.isSupabaseAuthenticated && !craftsmanId.startsWith("c_")) {
             viewModelScope.launch {
                 val remote = repository.fetchPortfolioOnce(craftsmanId)
                 if (remote.isNotEmpty()) {
@@ -1326,9 +1366,9 @@ class HirafiViewModel(
                 selfiePhotoUri = selfiePhotoUri
             ).onSuccess { cloudImagesUploaded ->
                 if (cloudImagesUploaded) {
-                    showMessage("تم رفع الوثائق إلى السحابة وإرسالها لمراجعة الأدمين ✓")
+                    showMessage("تم رفع الوثائق إلى Supabase Storage وإرسالها لمراجعة الأدمين ✓")
                 } else {
-                    showMessage("تم إرسال طلب التوثيق لمراجعة الأدمين (لتفعيل رفع الصور سحابياً فعّل Storage في Firebase Console)")
+                    showMessage("تم إرسال طلب التوثيق لمراجعة الأدمين (تأكد من إنشاء Bucket hirafi-media في Supabase)")
                 }
             }.onFailure { err ->
                 showMessage(err.message ?: "تعذر إرسال ملف التحقق")
@@ -1402,47 +1442,10 @@ class HirafiViewModel(
         }
     }
 
-    fun signInSupabase(email: String, password: String) {
-        viewModelScope.launch {
-            _authUiState.value = AuthUiState(isLoading = true)
-            val result = repository.signInWithSupabase(email, password)
-            _authUiState.value = result.fold(
-                onSuccess = { AuthUiState(isLoading = false, message = it, isError = false) },
-                onFailure = { AuthUiState(isLoading = false, message = it.message, isError = true) }
-            )
-        }
-    }
-
-    fun signUpSupabase(email: String, password: String, fullName: String, phone: String, city: String) {
-        viewModelScope.launch {
-            _authUiState.value = AuthUiState(isLoading = true)
-            val result = repository.signUpWithSupabase(email, password, fullName, phone, city)
-            _authUiState.value = result.fold(
-                onSuccess = { AuthUiState(isLoading = false, message = it, isError = false) },
-                onFailure = { AuthUiState(isLoading = false, message = it.message, isError = true) }
-            )
-        }
-    }
-
-    fun signOutSupabase() {
-        viewModelScope.launch {
-            repository.signOutSupabase()
-            _authUiState.value = AuthUiState(message = "تم تسجيل الخروج من حساب Supabase")
-        }
-    }
-
     @OptIn(ExperimentalCoroutinesApi::class)
-    private fun startFirestoreSync(role: UserRole, specialtyId: String) {
-        firestoreSyncJob?.cancel()
-        firestoreSyncJob = viewModelScope.launch {
-            // Sync FCM Push Token
-            launch {
-                val token = HirafiNotificationHelper.fetchFcmTokenOrNull()
-                if (!token.isNullOrBlank()) {
-                    repository.syncFcmToken(token)
-                }
-            }
-
+    private fun startSupabaseSync(role: UserRole, specialtyId: String) {
+        cloudSyncJob?.cancel()
+        cloudSyncJob = viewModelScope.launch {
             // Global Runtime Config (Production Mode toggle)
             launch {
                 repository.observeAppRuntimeConfig().collect { cfg ->
@@ -1498,14 +1501,14 @@ class HirafiViewModel(
             when (role) {
                 UserRole.CLIENT -> {
                     launch {
-                        repository.observeFirestoreClientRequests().collect { list ->
+                        repository.observeCloudClientRequests().collect { list ->
                             repository.cacheRemoteRequests(list)
                         }
                     }
                     launch {
                         val center = lastCraftsmenCenter ?: MoroccanLocations.coordForCity(userSession.value.city)
                             .let { it.lat to it.lng }
-                        repository.observeFirestoreOnlineCraftsmen(center.first, center.second)
+                        repository.observeCloudOnlineCraftsmen(center.first, center.second)
                             .collect { cloudPins ->
                                 _liveCloudCraftsmen.value = cloudPins
                             }
@@ -1518,7 +1521,7 @@ class HirafiViewModel(
                                 baselineReady = false
                                 seenOfferIds.clear()
                                 if (req != null && req.status == RequestStatus.SEARCHING) {
-                                    repository.observeFirestoreOffersForRequest(req.id, UserRole.CLIENT)
+                                    repository.observeCloudOffersForRequest(req.id, UserRole.CLIENT)
                                 } else {
                                     emptyFlow()
                                 }
@@ -1549,14 +1552,14 @@ class HirafiViewModel(
                         repository.syncCraftsmanDirectoryPresence(gps?.first, gps?.second)
                     }
                     launch {
-                        repository.observeFirestoreCraftsmanAssignedRequests().collect { list ->
+                        repository.observeCloudCraftsmanAssignedRequests().collect { list ->
                             repository.cacheRemoteRequests(list)
                         }
                     }
                     launch {
                         var baselineReady = false
                         val seenReqIds = mutableSetOf<String>()
-                        repository.observeFirestoreSearchingRequests(specialtyId).collect { list ->
+                        repository.observeCloudSearchingRequests(specialtyId).collect { list ->
                             repository.cacheRemoteRequests(list)
                             if (!baselineReady) {
                                 seenReqIds.addAll(list.map { it.id })
@@ -1575,9 +1578,9 @@ class HirafiViewModel(
                         }
                     }
                     launch {
-                        val uid = Firebase.auth.currentUser?.uid
+                        val uid = supabaseAuthState.value?.uid
                         if (!uid.isNullOrBlank()) {
-                            repository.observeFirestorePortfolioForCraftsman(uid).collect { items ->
+                            repository.observeCloudPortfolioForCraftsman(uid).collect { items ->
                                 repository.cacheRemotePortfolio(items)
                             }
                         }
@@ -1610,7 +1613,7 @@ class HirafiViewModel(
 
             if (role != UserRole.ADMIN) {
                 launch {
-                    val myUid = Firebase.auth.currentUser?.uid
+                    val myUid = supabaseAuthState.value?.uid
                     var msgBaselineReady = false
                     val seenMsgIds = mutableSetOf<String>()
                     _activeChatRequestId
@@ -1618,7 +1621,7 @@ class HirafiViewModel(
                             msgBaselineReady = false
                             seenMsgIds.clear()
                             if (reqId.isNullOrBlank()) emptyFlow()
-                            else repository.observeFirestoreMessagesForRequest(reqId)
+                            else repository.observeCloudMessagesForRequest(reqId)
                         }
                         .collect { messages ->
                             repository.cacheRemoteMessages(messages)
@@ -1659,8 +1662,8 @@ class HirafiViewModel(
     }
 
     fun stopCloudListenersBeforeSignOut() {
-        firestoreSyncJob?.cancel()
-        firestoreSyncJob = null
+        cloudSyncJob?.cancel()
+        cloudSyncJob = null
         trackingJob?.cancel()
         gpsStreamJob?.cancel()
         _liveCloudCraftsmen.value = emptyList()
@@ -1693,17 +1696,6 @@ class HirafiViewModel(
         }
     }
 
-    fun syncSupabaseNow() {
-        viewModelScope.launch {
-            _authUiState.value = AuthUiState(isLoading = true)
-            val result = repository.syncFromSupabase()
-            _authUiState.value = result.fold(
-                onSuccess = { count -> AuthUiState(message = "تمت المزامنة مع Supabase ($count طلبات)") },
-                onFailure = { err -> AuthUiState(message = err.message, isError = true) }
-            )
-        }
-    }
-
     fun showMessage(message: String) {
         _snackbarMessage.value = message
     }
@@ -1713,7 +1705,7 @@ class HirafiViewModel(
     }
 
     override fun onCleared() {
-        firestoreSyncJob?.cancel()
+        cloudSyncJob?.cancel()
         trackingJob?.cancel()
         gpsStreamJob?.cancel()
         locationService?.stopForegroundJobTracking()

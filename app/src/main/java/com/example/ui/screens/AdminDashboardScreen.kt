@@ -347,11 +347,11 @@ fun AdminDashboardScreen(
             title = { Text("إضافة أدمين جديد", fontWeight = FontWeight.ExtraBold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("أدخل بريد حساب غوغل المخول له تسجيل الدخول كأدمين:", fontSize = 13.sp)
+                    Text("أدخل البريد الإلكتروني المخول له تسجيل الدخول كأدمين:", fontSize = 13.sp)
                     OutlinedTextField(
                         value = newAdminEmail,
                         onValueChange = { newAdminEmail = it },
-                        placeholder = { Text("name@gmail.com") },
+                        placeholder = { Text("admin@example.com") },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -546,10 +546,10 @@ private fun AdminOverviewTab(
                         Text("جاهزية الإطلاق والإنتاج", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
                     }
                     Text("• المعرف الرسمي للتطبيق: com.hirafi.app", color = Color(0xFFD6DDE6), fontSize = 12.sp)
-                    Text("• بصمة التوقيع الحالية (Debug SHA-1) مضافة في Firebase", color = VerifiedEmerald, fontSize = 12.sp)
-                    Text("• Firebase Storage: فعّل Bucket من تبويب Storage ثم انشر storage.rules", color = ElectricLime, fontSize = 12.sp)
-                    Text("• الإشعارات (FCM): قنوات التنبيهات وخدمة Messaging مدمجة بالكامل", color = Color(0xFFD6DDE6), fontSize = 12.sp)
-                    Text("• قبل النشر على Google Play: أضف بصمة SHA-1 و SHA-256 لمفتاح Release في Firebase", color = Color(0xFFD6DDE6), fontSize = 12.sp)
+                    Text("• الخادم السحابي: Supabase Auth + PostgreSQL (ملف supabase/schema.sql)", color = VerifiedEmerald, fontSize = 12.sp)
+                    Text("• Supabase Storage: تأكد من تشغيل schema.sql لإنشاء Bucket: hirafi-media", color = ElectricLime, fontSize = 12.sp)
+                    Text("• الإشعارات المحلية: قنوات تنبيهات العروض والرسائل وتوثيق الهوية مدمجة", color = Color(0xFFD6DDE6), fontSize = 12.sp)
+                    Text("• قبل النشر: أضف مفاتيح SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets", color = Color(0xFFD6DDE6), fontSize = 12.sp)
                 }
             }
         }

@@ -80,7 +80,7 @@ class RealtimeBiddingViewModel(
     val statusEvent: StateFlow<String?> = _statusEvent.asStateFlow()
 
     private var realtimePollingJob: Job? = null
-    private var firestoreOffersJob: Job? = null
+    private var cloudOffersJob: Job? = null
 
     private val tickerMillis: StateFlow<Long> = flow {
         while (true) {
@@ -171,7 +171,7 @@ class RealtimeBiddingViewModel(
         if (_boundRequestId.value != request.id) {
             _boundRequestId.value = request.id
             prepareDraftForRequest(request)
-            startRealtimeFirestoreOffers(request.id)
+            startRealtimeCloudOffers(request.id)
             startRealtimeOfferPolling(request.id)
         } else if (_bidDraft.value.requestId != request.id) {
             prepareDraftForRequest(request)
@@ -180,8 +180,8 @@ class RealtimeBiddingViewModel(
 
     fun unbindRequest() {
         _boundRequestId.value = null
-        firestoreOffersJob?.cancel()
-        firestoreOffersJob = null
+        cloudOffersJob?.cancel()
+        cloudOffersJob = null
         realtimePollingJob?.cancel()
         realtimePollingJob = null
     }
@@ -375,12 +375,12 @@ class RealtimeBiddingViewModel(
         _statusEvent.value = null
     }
 
-    private fun startRealtimeFirestoreOffers(requestId: String) {
-        firestoreOffersJob?.cancel()
-        if (!repository.isFirestoreAuthenticated) return
-        firestoreOffersJob = viewModelScope.launch {
+    private fun startRealtimeCloudOffers(requestId: String) {
+        cloudOffersJob?.cancel()
+        if (!repository.isSupabaseAuthenticated) return
+        cloudOffersJob = viewModelScope.launch {
             val session = repository.userSession.first()
-            repository.observeFirestoreOffersForRequest(requestId, session.role)
+            repository.observeCloudOffersForRequest(requestId, session.role)
                 .collect { remoteOffers ->
                     repository.cacheRemoteOffers(remoteOffers)
                 }
@@ -393,7 +393,7 @@ class RealtimeBiddingViewModel(
             while (isActive && _boundRequestId.value == requestId) {
                 val currentReq = boundRequest.value
                 if (currentReq == null || currentReq.status == RequestStatus.SEARCHING) {
-                    if (!repository.isFirestoreAuthenticated) {
+                    if (!repository.isSupabaseAuthenticated) {
                         _isSyncingRealtime.value = true
                         repository.syncOffersForRequestFromSupabase(requestId)
                         _isSyncingRealtime.value = false
@@ -405,7 +405,7 @@ class RealtimeBiddingViewModel(
     }
 
     override fun onCleared() {
-        firestoreOffersJob?.cancel()
+        cloudOffersJob?.cancel()
         realtimePollingJob?.cancel()
         super.onCleared()
     }

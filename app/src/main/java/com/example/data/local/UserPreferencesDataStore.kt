@@ -48,6 +48,8 @@ class UserPreferencesDataStore(private val context: Context) {
         val IS_SUSPENDED = booleanPreferencesKey("is_suspended")
         val SUPABASE_EMAIL = stringPreferencesKey("supabase_email")
         val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
+        val SUPABASE_REFRESH_TOKEN = stringPreferencesKey("supabase_refresh_token")
+        val SUPABASE_EXPIRES_AT = longPreferencesKey("supabase_expires_at")
     }
 
     val userSessionFlow: Flow<UserSession> = context.dataStore.data.map { prefs ->
@@ -79,7 +81,9 @@ class UserPreferencesDataStore(private val context: Context) {
             fcmToken = prefs[Keys.FCM_TOKEN] ?: "",
             isSuspended = prefs[Keys.IS_SUSPENDED] ?: false,
             supabaseEmail = prefs[Keys.SUPABASE_EMAIL],
-            supabaseAccessToken = prefs[Keys.SUPABASE_ACCESS_TOKEN]
+            supabaseAccessToken = prefs[Keys.SUPABASE_ACCESS_TOKEN],
+            supabaseRefreshToken = prefs[Keys.SUPABASE_REFRESH_TOKEN],
+            supabaseExpiresAtMillis = prefs[Keys.SUPABASE_EXPIRES_AT] ?: 0L
         )
     }
 
@@ -203,11 +207,24 @@ class UserPreferencesDataStore(private val context: Context) {
         }
     }
 
-    suspend fun saveSupabaseAuth(userId: String, email: String, accessToken: String) {
+    suspend fun saveSupabaseAuth(
+        userId: String,
+        email: String,
+        accessToken: String,
+        refreshToken: String? = null,
+        expiresAtMillis: Long = 0L
+    ) {
         context.dataStore.edit {
             it[Keys.USER_ID] = userId
-            it[Keys.SUPABASE_EMAIL] = email
+            it[Keys.EMAIL] = email.trim().lowercase()
+            it[Keys.SUPABASE_EMAIL] = email.trim().lowercase()
             it[Keys.SUPABASE_ACCESS_TOKEN] = accessToken
+            if (!refreshToken.isNullOrBlank()) {
+                it[Keys.SUPABASE_REFRESH_TOKEN] = refreshToken
+            }
+            if (expiresAtMillis > 0L) {
+                it[Keys.SUPABASE_EXPIRES_AT] = expiresAtMillis
+            }
         }
     }
 
@@ -215,6 +232,8 @@ class UserPreferencesDataStore(private val context: Context) {
         context.dataStore.edit {
             it.remove(Keys.SUPABASE_EMAIL)
             it.remove(Keys.SUPABASE_ACCESS_TOKEN)
+            it.remove(Keys.SUPABASE_REFRESH_TOKEN)
+            it.remove(Keys.SUPABASE_EXPIRES_AT)
             it[Keys.USER_ID] = "local_user"
         }
     }
