@@ -67,7 +67,7 @@ class SupabaseSessionManager(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Google ID token exchange failed", e)
-            Result.failure(IllegalStateException(e.localizedMessage ?: "تعذر تسجيل الدخول عبر غوغل في Supabase"))
+            Result.failure(wrapAuthException(e))
         }
     }
 
@@ -85,7 +85,7 @@ class SupabaseSessionManager(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Email sign in failed", e)
-            Result.failure(IllegalStateException(e.localizedMessage ?: "تعذر تسجيل الدخول في Supabase"))
+            Result.failure(wrapAuthException(e))
         }
     }
 
@@ -117,7 +117,7 @@ class SupabaseSessionManager(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Email sign up failed", e)
-            Result.failure(IllegalStateException(e.localizedMessage ?: "تعذر إنشاء الحساب في Supabase"))
+            Result.failure(wrapAuthException(e))
         }
     }
 
@@ -220,10 +220,20 @@ class SupabaseSessionManager(
             lowered.contains("invalid login credentials") -> "البريد الإلكتروني أو كلمة المرور غير صحيحة"
             lowered.contains("user already registered") -> "هذا البريد الإلكتروني مسجل مسبقاً، اختر تسجيل الدخول"
             lowered.contains("email not confirmed") -> "يرجى تأكيد بريدك الإلكتروني أولاً قبل تسجيل الدخول"
+            lowered.contains("rate limit") || lowered.contains("429") -> "تم تجاوز الحد المسموح من محاولات التسجيل أو إرسال البريد مؤقتاً (429). يرجى الانتظار قليلًا أو تسجيل الدخول مباشرة إذا كان حسابك مسجلاً."
             lowered.contains("provider is not enabled") -> "تسجيل الدخول عبر غوغل غير مفعّل بعد في إعدادات Supabase Authentication"
             lowered.contains("password should be at least") -> "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل"
             parsed.isNotBlank() -> "$parsed (${response.code()})"
-            else -> "تعذر إتمام المصادقة في Supabase (${response.code()})"
+            else -> "تعذر إتمام المصادقة (${response.code()})"
+        }
+    }
+
+    private fun wrapAuthException(e: Exception): Throwable {
+        val msg = e.localizedMessage.orEmpty()
+        return if (msg.contains("Unable to resolve host") || msg.contains("No address associated") || e is java.net.UnknownHostException) {
+            IllegalStateException("تعذر الوصول إلى الخادم. يرجى التأكد من صحة رابط المشروع (SUPABASE_URL) في لوحة Secrets وتوفر اتصال الإنترنت.")
+        } else {
+            IllegalStateException(msg.ifBlank { "تعذر الاتصال بالخادم" })
         }
     }
 

@@ -192,7 +192,7 @@ fun ClientHomeScreen(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val maxSheetBodyHeight = (maxHeight * 0.64f).coerceAtLeast(280.dp)
-        // 1. Live inDrive-style real CARTO / OSM map
+        // 1. Live inDrive-speed real Mapbox map
         HirafiRealMap(
             centerLat = activeRequest?.lat ?: draft.lat,
             centerLng = activeRequest?.lng ?: draft.lng,
