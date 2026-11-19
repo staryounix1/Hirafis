@@ -300,7 +300,11 @@ class RealtimeBiddingViewModel(
 
     fun declineOffer(offerId: String) {
         viewModelScope.launch {
-            repository.declineOffer(offerId)
+            runCatching {
+                repository.declineOffer(offerId)
+            }.onFailure { err ->
+                _statusEvent.value = err.message ?: "تعذر رفض العرض"
+            }
         }
     }
 
@@ -357,8 +361,13 @@ class RealtimeBiddingViewModel(
         val activeState = uiState.value as? BiddingUiState.Active ?: return
         val newPrice = activeState.priceProposal.clampedPrice(price).coerceAtLeast(50)
         viewModelScope.launch {
-            repository.raiseRequestPrice(activeState.request.id, newPrice)
-            _statusEvent.value = "تم تحديث السعر المقترح إلى $newPrice د.م"
+            runCatching {
+                repository.raiseRequestPrice(activeState.request.id, newPrice)
+            }.onSuccess {
+                _statusEvent.value = "تم تحديث السعر المقترح إلى $newPrice د.م"
+            }.onFailure { err ->
+                _statusEvent.value = err.message ?: "تعذر تحديث السعر المقترح"
+            }
         }
     }
 

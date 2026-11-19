@@ -614,4 +614,58 @@ class ExampleUnitTest {
     assertEquals(UserRole.CRAFTSMAN, craftsmanMessage.senderRole)
     assertTrue(craftsmanMessage.createdAtMillis > clientMessage.createdAtMillis)
   }
+
+  @Test
+  fun `same city live cloud craftsmen remain visible even when distance exceeds 5 km radius`() {
+    val pins = listOf(
+      CraftsmanPin(
+        id = "cloud_same_city_far",
+        name = "رشيد الدار البيضاء",
+        specialtyId = "plumbing",
+        specialtyName = "سباكة",
+        rating = 4.9,
+        completedJobs = 20,
+        lat = 33.61,
+        lng = -7.49,
+        basePriceDh = 140,
+        distanceKm = 18.5,
+        etaMinutes = 25,
+        phone = "+212600000010",
+        experienceYears = 7,
+        bio = "سباك محترف",
+        isLiveCloud = true,
+        city = "الدار البيضاء"
+      ),
+      CraftsmanPin(
+        id = "cloud_other_city_far",
+        name = "كريم طنجة",
+        specialtyId = "plumbing",
+        specialtyName = "سباكة",
+        rating = 4.9,
+        completedJobs = 30,
+        lat = 35.76,
+        lng = -5.83,
+        basePriceDh = 130,
+        distanceKm = 340.0,
+        etaMinutes = 180,
+        phone = "+212600000011",
+        experienceYears = 8,
+        bio = "سباك طنجة",
+        isLiveCloud = true,
+        city = "طنجة"
+      )
+    )
+
+    val filtered = HirafiViewModel.filterAndSortCraftsmen(
+      pins = pins,
+      query = "",
+      radiusKm = 5,
+      sort = CraftsmanSortOption.NEAREST,
+      onlySelectedCategory = false,
+      selectedCategoryId = "plumbing",
+      onlyCloudCraftsmen = false,
+      clientCity = "الدار البيضاء"
+    )
+    assertEquals(listOf("cloud_same_city_far"), filtered.map { it.id })
+  }
 }

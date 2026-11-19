@@ -153,7 +153,26 @@ class SupabaseMarketplaceRepository(
             )
             if (res.isSuccessful) {
                 res.body().orEmpty().map { it.toDomain() }
-            } else null
+            } else {
+                Log.w(TAG, "observeOffersForRequest(${res.code()}): ${res.errorBody()?.string()}")
+                null
+            }
+        }
+
+    fun observeOffersForCraftsman(): Flow<List<ServiceOffer>> =
+        pollingFlow(2500L) { api, bearer, uid ->
+            val res = api.getOffersForRequest(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                requestIdFilter = null,
+                craftsmanIdFilter = "eq.$uid"
+            )
+            if (res.isSuccessful) {
+                res.body().orEmpty().map { it.toDomain() }
+            } else {
+                Log.w(TAG, "observeOffersForCraftsman(${res.code()}): ${res.errorBody()?.string()}")
+                null
+            }
         }
 
     fun observeMessagesForRequest(requestId: String): Flow<List<ChatMessage>> =
@@ -279,8 +298,10 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun updateProposedPrice(requestId: String, newPrice: Int): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة Supabase، يرجى إعادة تسجيل الدخول"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -292,7 +313,9 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر تحديث السعر (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر تحديث السعر", res.code(), rawErr)
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -302,16 +325,20 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun acceptOffer(offer: ServiceOffer): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة Supabase، يرجى إعادة تسجيل الدخول"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
-            runCatching {
-                api.patchOffer(
-                    apiKey = SupabaseConfig.anonKey,
-                    bearer = bearer,
-                    idFilter = "eq.${offer.id}",
-                    patch = SupabaseOfferPatchDto(status = OfferStatus.ACCEPTED.dbValue)
-                )
+            val offerPatchRes = api.patchOffer(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                idFilter = "eq.${offer.id}",
+                patch = SupabaseOfferPatchDto(status = OfferStatus.ACCEPTED.dbValue)
+            )
+            if (!offerPatchRes.isSuccessful) {
+                val rawOfferErr = runCatching { offerPatchRes.errorBody()?.string() }.getOrNull().orEmpty()
+                Log.w(TAG, "acceptOffer patchOffer (${offerPatchRes.code()}): $rawOfferErr")
             }
             val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -330,7 +357,10 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر قبول العرض (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر قبول العرض", res.code(), rawErr)
+                Log.e(TAG, "acceptOffer failed (${res.code()}): $rawErr")
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -344,9 +374,12 @@ class SupabaseMarketplaceRepository(
         acceptedPrice: Int,
         session: UserSession
     ): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase، يرجى إعادة تسجيل الدخول"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة في Supabase"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -365,7 +398,10 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر قبول الطلب (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر قبول الطلب", res.code(), rawErr)
+                Log.e(TAG, "directAcceptRequestAsCraftsman failed (${res.code()}): $rawErr")
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -375,8 +411,10 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun advanceRequestStatus(requestId: String, nextStatus: RequestStatus): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة Supabase، يرجى إعادة تسجيل الدخول"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -388,7 +426,9 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر تحديث حالة الطلب (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر تحديث حالة الطلب", res.code(), rawErr)
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -402,8 +442,10 @@ class SupabaseMarketplaceRepository(
         lat: Double,
         lng: Double
     ): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -423,9 +465,12 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun submitOffer(offer: ServiceOffer, clientId: String): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase، يرجى إعادة تسجيل الدخول"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة في Supabase"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.createOffer(
                 apiKey = SupabaseConfig.anonKey,
@@ -452,12 +497,16 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر إرسال العرض (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر إرسال العرض", res.code(), rawErr)
+                Log.e(TAG, "submitOffer failed (${res.code()}): $rawErr")
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "submitOffer exception", e)
+            Result.failure(IllegalStateException("تعذر إرسال العرض للسحابة: ${e.localizedMessage ?: "تحقق من الإنترنت"}"))
         }
     }
 
@@ -468,8 +517,10 @@ class SupabaseMarketplaceRepository(
         note: String,
         expiresAtMillis: Long
     ): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة Supabase، يرجى إعادة تسجيل الدخول"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.patchOffer(
                 apiKey = SupabaseConfig.anonKey,
@@ -486,7 +537,9 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر تحديث العرض (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر تحديث العرض", res.code(), rawErr)
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -496,9 +549,12 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun sendChatMessage(message: ChatMessage): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         val cleanText = message.text.trim().take(1000)
         if (cleanText.isEmpty()) return Result.success(Unit)
         return try {
@@ -518,7 +574,9 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر إرسال الرسالة (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر إرسال الرسالة", res.code(), rawErr)
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
@@ -528,9 +586,12 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun submitReview(review: ReviewRecord): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.postReview(
                 apiKey = SupabaseConfig.anonKey,
@@ -546,7 +607,10 @@ class SupabaseMarketplaceRepository(
                 )
             )
             if (res.isSuccessful) Result.success(Unit)
-            else Result.failure(IllegalStateException("تعذر حفظ التقييم (${res.code()})"))
+            else {
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                Result.failure(IllegalStateException(formatHttpError("تعذر حفظ التقييم", res.code(), rawErr)))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -559,10 +623,13 @@ class SupabaseMarketplaceRepository(
         lat: Double,
         lng: Double
     ): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
         if (session.role != UserRole.CRAFTSMAN) return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val category = HirafiCategories.byId(session.craftsmanSpecialtyId)
             val res = api.patchProfile(
@@ -587,7 +654,8 @@ class SupabaseMarketplaceRepository(
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر تحديث تواجد الحرفي (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                Result.failure(IllegalStateException(formatHttpError("تعذر تحديث تواجد الحرفي", res.code(), rawErr)))
             }
         } catch (e: CancellationException) {
             throw e
@@ -597,9 +665,12 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun addPortfolioItem(item: PortfolioItem): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.createPortfolioItem(
                 apiKey = SupabaseConfig.anonKey,
@@ -627,16 +698,22 @@ class SupabaseMarketplaceRepository(
     }
 
     suspend fun deletePortfolioItem(itemId: String): Result<Unit> {
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة Supabase"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
-            api.deletePortfolioItem(
+            val res = api.deletePortfolioItem(
                 apiKey = SupabaseConfig.anonKey,
                 bearer = bearer,
                 idFilter = "eq.$itemId"
             )
-            triggerRefresh()
-            Result.success(Unit)
+            if (res.isSuccessful) {
+                triggerRefresh()
+                Result.success(Unit)
+            } else {
+                Result.failure(IllegalStateException("تعذر حذف العمل (${res.code()})"))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

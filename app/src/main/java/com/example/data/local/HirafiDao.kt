@@ -56,6 +56,9 @@ interface HirafiDao {
     @Query("SELECT * FROM service_offers WHERE requestId = :requestId ORDER BY createdAtMillis DESC")
     fun observeOffersForRequest(requestId: String): Flow<List<ServiceOfferEntity>>
 
+    @Query("SELECT * FROM service_offers WHERE craftsmanId = :craftsmanId ORDER BY createdAtMillis DESC")
+    fun observeOffersByCraftsman(craftsmanId: String): Flow<List<ServiceOfferEntity>>
+
     @Query("SELECT * FROM service_offers WHERE id = :offerId LIMIT 1")
     suspend fun getOfferById(offerId: String): ServiceOfferEntity?
 
@@ -64,6 +67,9 @@ interface HirafiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertOffers(offers: List<ServiceOfferEntity>)
+
+    @Query("DELETE FROM service_offers WHERE id = :offerId")
+    suspend fun deleteOfferById(offerId: String)
 
     @Query("UPDATE service_offers SET status = :newStatus WHERE requestId = :requestId AND id != :acceptedOfferId AND status = 'pending'")
     suspend fun declineOtherOffers(requestId: String, acceptedOfferId: String, newStatus: String = "declined")

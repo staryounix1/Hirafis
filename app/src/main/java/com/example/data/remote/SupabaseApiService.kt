@@ -237,7 +237,7 @@ interface SupabaseApiService {
     suspend fun getOffersForRequest(
         @Header("apikey") apiKey: String,
         @Header("Authorization") bearer: String,
-        @Query("request_id") requestIdFilter: String,
+        @Query("request_id") requestIdFilter: String? = null,
         @Query("craftsman_id") craftsmanIdFilter: String? = null
     ): Response<List<SupabaseServiceOfferDto>>
 

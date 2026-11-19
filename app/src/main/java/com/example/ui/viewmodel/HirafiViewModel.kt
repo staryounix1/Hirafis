@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -272,8 +273,9 @@ class HirafiViewModel(
                 onlyCloudCraftsmen = false
             )
         },
-        _onlyCloudCraftsmen
-    ) { pins, baseParams, onlyCloud ->
+        _onlyCloudCraftsmen,
+        userSession
+    ) { pins, baseParams, onlyCloud, session ->
         filterAndSortCraftsmen(
             pins = pins,
             query = baseParams.query,
@@ -281,7 +283,8 @@ class HirafiViewModel(
             sort = baseParams.sort,
             onlySelectedCategory = baseParams.onlySelectedCategory,
             selectedCategoryId = baseParams.selectedCategoryId,
-            onlyCloudCraftsmen = onlyCloud
+            onlyCloudCraftsmen = onlyCloud,
+            clientCity = session.city
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _nearbyCraftsmen.value)
 
@@ -314,6 +317,20 @@ class HirafiViewModel(
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val craftsmanSubmittedOffers: StateFlow<Map<String, ServiceOffer>> = userSession
+        .flatMapLatest { session ->
+            if (session.role == UserRole.CRAFTSMAN && session.userId.isNotBlank()) {
+                repository.observeOffersByCraftsman(session.userId)
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .map { offers ->
+            offers.groupBy { it.requestId }.mapValues { (_, list) -> list.first() }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeOffers: StateFlow<List<ServiceOffer>> = activeClientRequest
@@ -862,7 +879,7 @@ class HirafiViewModel(
         }
     }
 
-    fun fetchCurrentGpsLocation(context: Context) {
+    fun fetchCurrentGpsLocation(context: Context, isAutoStartup: Boolean = false) {
         val appContext = context.applicationContext
         val svc = locationService ?: RealTimeLocationService(appContext)
         _trackingState.update { it.copy(hasLocationPermission = svc.hasLocationPermission()) }
@@ -873,6 +890,13 @@ class HirafiViewModel(
             if (fix != null) {
                 val lat = fix.lat
                 val lng = fix.lng
+                val cityCoord = MoroccanLocations.coordForCity(userSession.value.city)
+                val distFromCityKm = MapRoutingService.haversineKm(lat, lng, cityCoord.lat, cityCoord.lng)
+                if (isAutoStartup && distFromCityKm > 150.0) {
+                    // Keep Moroccan city coordinates anchored on emulator/out-of-region auto-startup
+                    _trackingState.update { it.copy(latestFix = fix, hasLocationPermission = true, errorMessage = null) }
+                    return@launch
+                }
                 _userGpsLocation.value = lat to lng
                 _cameraTarget.value = lat to lng
                 _trackingState.update { it.copy(latestFix = fix, hasLocationPermission = true, errorMessage = null) }
@@ -896,8 +920,10 @@ class HirafiViewModel(
                         )
                     }
                 }
-                showMessage("تم تحديد موقعك الحقيقي عبر GPS")
-            } else {
+                if (!isAutoStartup) {
+                    showMessage("تم تحديد موقعك الحقيقي عبر GPS")
+                }
+            } else if (!isAutoStartup) {
                 showMessage("فعّل خدمة الموقع (GPS) على الجهاز أو حرّك الخريطة لتحديد مكانك")
             }
         }
@@ -986,6 +1012,7 @@ class HirafiViewModel(
                 ).onSuccess { req ->
                     _activeClientRequestId.value = req.id
                     _draft.update { it.copy(title = "", description = "", photoUri = null) }
+                    repository.refreshMarketplaceNow()
                     val msg = if (preferredCraftsmanId != null) {
                         "تم إرسال طلب مباشر للحرفي المختار وللحرفيين القريبين!"
                     } else {
@@ -1005,53 +1032,82 @@ class HirafiViewModel(
         val req = activeClientRequest.value ?: return
         val newPrice = (req.proposedPrice + delta).coerceAtLeast(50)
         viewModelScope.launch {
-            repository.raiseRequestPrice(req.id, newPrice)
-            showMessage("تم رفع السعر المقترح إلى $newPrice درهم")
+            runCatching {
+                repository.raiseRequestPrice(req.id, newPrice)
+            }.onSuccess {
+                showMessage("تم رفع السعر المقترح إلى $newPrice درهم")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر تحديث السعر في Supabase")
+            }
         }
     }
 
     fun acceptOffer(offer: ServiceOffer) {
         viewModelScope.launch {
-            repository.acceptOffer(offer)
-            showMessage("تم قبول عرض ${offer.craftsmanName} بسعر ${offer.offeredPrice} درهم")
+            runCatching {
+                repository.acceptOffer(offer)
+            }.onSuccess {
+                showMessage("تم قبول عرض ${offer.craftsmanName} بسعر ${offer.offeredPrice} درهم")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر قبول العرض")
+            }
         }
     }
 
     fun declineOffer(offerId: String) {
         viewModelScope.launch {
-            repository.declineOffer(offerId)
+            runCatching {
+                repository.declineOffer(offerId)
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر رفض العرض")
+            }
         }
     }
 
     fun counterOffer(offer: ServiceOffer, counterPrice: Int) {
         viewModelScope.launch {
-            repository.counterOffer(offer, counterPrice.coerceAtLeast(40))
-            showMessage("تم إرسال عرض مضاد ($counterPrice درهم) لـ ${offer.craftsmanName}")
+            runCatching {
+                repository.counterOffer(offer, counterPrice.coerceAtLeast(40))
+            }.onSuccess {
+                showMessage("تم إرسال عرض مضاد ($counterPrice درهم) لـ ${offer.craftsmanName}")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إرسال العرض المضاد")
+            }
         }
     }
 
     fun cancelActiveRequest() {
         val req = activeClientRequest.value ?: return
         viewModelScope.launch {
-            repository.cancelRequest(req.id)
-            _activeClientRequestId.value = null
-            showMessage("تم إلغاء الطلب")
+            runCatching {
+                repository.cancelRequest(req.id)
+            }.onSuccess {
+                _activeClientRequestId.value = null
+                showMessage("تم إلغاء الطلب")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إلغاء الطلب")
+            }
         }
     }
 
     fun advanceJobStatus(request: ServiceRequest, nextStatus: RequestStatus) {
         viewModelScope.launch {
-            repository.advanceJobStatus(request.id, nextStatus)
-            if (nextStatus == RequestStatus.COMPLETED) {
-                if (userSession.value.role == UserRole.CLIENT) {
-                    _pendingReviewRequest.value = request.copy(status = RequestStatus.COMPLETED)
+            runCatching {
+                repository.advanceJobStatus(request.id, nextStatus)
+            }.onSuccess {
+                if (nextStatus == RequestStatus.COMPLETED) {
+                    if (userSession.value.role == UserRole.CLIENT) {
+                        _pendingReviewRequest.value = request.copy(status = RequestStatus.COMPLETED)
+                    }
+                    if (_activeClientRequestId.value == request.id) {
+                        _activeClientRequestId.value = null
+                    }
+                    showMessage("تم إتمام الخدمة بنجاح!")
+                } else {
+                    showMessage("تم تحديث الحالة إلى: ${nextStatus.labelAr}")
                 }
-                if (_activeClientRequestId.value == request.id) {
-                    _activeClientRequestId.value = null
-                }
-                showMessage("تم إتمام الخدمة بنجاح!")
-            } else {
-                showMessage("تم تحديث الحالة إلى: ${nextStatus.labelAr}")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر تحديث حالة الطلب")
             }
         }
     }
@@ -1062,15 +1118,20 @@ class HirafiViewModel(
 
     fun submitReview(request: ServiceRequest, rating: Int, tags: List<String>, comment: String) {
         viewModelScope.launch {
-            repository.submitReview(
-                requestId = request.id,
-                craftsmanId = request.assignedCraftsmanId ?: "craftsman",
-                rating = rating,
-                tags = tags,
-                comment = comment
-            )
-            _pendingReviewRequest.value = null
-            showMessage("شكراً لتقييمك! يساعد هذا في تحسين جودة الحرفيين.")
+            runCatching {
+                repository.submitReview(
+                    requestId = request.id,
+                    craftsmanId = request.assignedCraftsmanId ?: "craftsman",
+                    rating = rating,
+                    tags = tags,
+                    comment = comment
+                )
+            }.onSuccess {
+                _pendingReviewRequest.value = null
+                showMessage("شكراً لتقييمك! يساعد هذا في تحسين جودة الحرفيين.")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر حفظ التقييم")
+            }
         }
     }
 
@@ -1112,7 +1173,11 @@ class HirafiViewModel(
 
     fun sendChatMessage(requestId: String, text: String) {
         viewModelScope.launch {
-            repository.sendChatMessage(requestId, text)
+            runCatching {
+                repository.sendChatMessage(requestId, text)
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إرسال الرسالة")
+            }
         }
     }
 
@@ -1256,6 +1321,9 @@ class HirafiViewModel(
     fun toggleCraftsmanOnline(isOnline: Boolean) {
         viewModelScope.launch {
             repository.setCraftsmanOnline(isOnline)
+                .onFailure { err ->
+                    showMessage(err.message ?: "تعذر تحديث حالة الاتصال في Supabase")
+                }
         }
     }
 
@@ -1263,6 +1331,11 @@ class HirafiViewModel(
         viewModelScope.launch {
             repository.setCity(city)
             val coord = MoroccanLocations.coordForCity(city)
+            _userGpsLocation.value?.let { gps ->
+                if (MapRoutingService.haversineKm(gps.first, gps.second, coord.lat, coord.lng) > 150.0) {
+                    _userGpsLocation.value = null
+                }
+            }
             selectNeighborhood(city, coord.lat, coord.lng)
         }
     }
@@ -1565,12 +1638,20 @@ class HirafiViewModel(
 
                 UserRole.CRAFTSMAN -> {
                     launch {
-                        val gps = _userGpsLocation.value
-                        repository.syncCraftsmanDirectoryPresence(gps?.first, gps?.second)
+                        val cityCoord = MoroccanLocations.coordForCity(userSession.value.city)
+                        val validGps = _userGpsLocation.value?.takeIf { gps ->
+                            MapRoutingService.haversineKm(gps.first, gps.second, cityCoord.lat, cityCoord.lng) <= 150.0
+                        }
+                        repository.syncCraftsmanDirectoryPresence(validGps?.first, validGps?.second)
                     }
                     launch {
                         repository.observeCloudCraftsmanAssignedRequests().collect { list ->
                             repository.cacheRemoteRequests(list)
+                        }
+                    }
+                    launch {
+                        repository.observeCloudOffersForCraftsman().collect { offers ->
+                            repository.cacheRemoteOffers(offers)
                         }
                     }
                     launch {
@@ -1694,9 +1775,17 @@ class HirafiViewModel(
 
     fun logoutAccount() {
         stopCloudListenersBeforeSignOut()
+        repository.clearRequestsSyncError()
         _activeClientRequestId.value = null
         _activeChatRequestId.value = null
         _pendingReviewRequest.value = null
+        _userGpsLocation.value = null
+        lastCraftsmenCenter = null
+        _craftsmanSearchQuery.value = ""
+        _searchRadiusKm.value = 5
+        _onlySelectedCategoryOnMap.value = false
+        _onlyCloudCraftsmen.value = false
+        _draft.value = DraftRequestState()
         _liveRoute.value = LiveRouteState()
         _trackingState.update {
             it.copy(
@@ -1737,13 +1826,19 @@ class HirafiViewModel(
             sort: CraftsmanSortOption,
             onlySelectedCategory: Boolean,
             selectedCategoryId: String,
-            onlyCloudCraftsmen: Boolean = false
+            onlyCloudCraftsmen: Boolean = false,
+            clientCity: String? = null
         ): List<CraftsmanPin> {
             val q = query.trim()
+            val cleanClientCity = clientCity?.trim()?.takeIf { it.isNotBlank() }
             val isSearchingByText = q.isNotEmpty()
             val filtered = pins.filter { pin ->
+                val sameCityCloud = cleanClientCity != null &&
+                    pin.isLiveCloud &&
+                    pin.city.trim().equals(cleanClientCity, ignoreCase = true)
                 val withinRadius = isSearchingByText ||
                     onlyCloudCraftsmen ||
+                    sameCityCloud ||
                     radiusKm >= 20 ||
                     pin.distanceKm <= radiusKm.toDouble()
                 val matchesCat = !onlySelectedCategory || pin.specialtyId == selectedCategoryId

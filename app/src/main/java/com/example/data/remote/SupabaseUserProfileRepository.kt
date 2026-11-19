@@ -64,7 +64,7 @@ class SupabaseUserProfileRepository(
                 return Result.failure(IllegalStateException("تعذر قراءة الملف الشخصي (${res.code()})"))
             }
             val existing = res.body()?.firstOrNull()
-            if (existing != null && existing.roleLocked) {
+            if (existing != null && (existing.roleLocked || existing.role == "craftsman" || existing.role == "admin")) {
                 val effectiveEmail = existing.email.ifBlank { auth.email }.trim().lowercase()
                 if (existing.role != "admin" && isEmailAuthorizedAdmin(effectiveEmail, bearer)) {
                     api.patchProfile(
@@ -131,7 +131,7 @@ class SupabaseUserProfileRepository(
                 idFilter = "eq.${auth.uid}"
             )
             val existing = if (getRes.isSuccessful) getRes.body()?.firstOrNull() else null
-            if (existing != null && existing.roleLocked) {
+            if (existing != null && (existing.roleLocked || existing.role == "craftsman" || existing.role == "admin")) {
                 val existingEmail = existing.email.ifBlank { cleanEmail }.trim().lowercase()
                 if (existing.role != "admin" && (isAdminEmail || isEmailAuthorizedAdmin(existingEmail, bearer))) {
                     api.patchProfile(
@@ -208,9 +208,12 @@ class SupabaseUserProfileRepository(
         experienceYears: Int,
         basePriceDh: Int
     ): Result<Unit> {
-        val uid = sessionManager.currentUidOrNull ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = sessionManager.currentUidOrNull
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.patchProfile(
                 apiKey = SupabaseConfig.anonKey,

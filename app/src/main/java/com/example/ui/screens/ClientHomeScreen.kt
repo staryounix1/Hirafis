@@ -179,7 +179,7 @@ fun ClientHomeScreen(
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
         if (granted && userGps == null) {
-            viewModel.fetchCurrentGpsLocation(context)
+            viewModel.fetchCurrentGpsLocation(context, isAutoStartup = true)
         }
     }
 

@@ -81,6 +81,10 @@ class HirafiRepository(
         supabaseMarketplaceRepo?.triggerRefresh()
     }
 
+    fun clearRequestsSyncError() {
+        supabaseMarketplaceRepo?.clearRequestsSyncError()
+    }
+
     fun getCraftsmenAround(centerLat: Double = 33.5822, centerLng: Double = -7.6324): List<CraftsmanPin> =
         computeCraftsmenAround(centerLat, centerLng)
 
@@ -95,6 +99,9 @@ class HirafiRepository(
 
     fun observeOffersForRequest(requestId: String): Flow<List<ServiceOffer>> =
         dao.observeOffersForRequest(requestId).map { list -> list.map { it.toDomain() } }
+
+    fun observeOffersByCraftsman(craftsmanId: String): Flow<List<ServiceOffer>> =
+        dao.observeOffersByCraftsman(craftsmanId).map { list -> list.map { it.toDomain() } }
 
     fun observeMessagesForRequest(requestId: String): Flow<List<ChatMessage>> =
         dao.observeMessagesForRequest(requestId).map { list -> list.map { it.toDomain() } }
@@ -116,6 +123,9 @@ class HirafiRepository(
 
     fun observeCloudOffersForRequest(requestId: String, role: UserRole): Flow<List<ServiceOffer>> =
         supabaseMarketplaceRepo?.observeOffersForRequest(requestId, role) ?: emptyFlow()
+
+    fun observeCloudOffersForCraftsman(): Flow<List<ServiceOffer>> =
+        supabaseMarketplaceRepo?.observeOffersForCraftsman() ?: emptyFlow()
 
     fun observeCloudMessagesForRequest(requestId: String): Flow<List<ChatMessage>> =
         supabaseMarketplaceRepo?.observeMessagesForRequest(requestId) ?: emptyFlow()
@@ -522,13 +532,19 @@ class HirafiRepository(
             ?: Result.success(Unit)
     }
 
-    suspend fun setCraftsmanOnline(isOnline: Boolean) {
+    suspend fun setCraftsmanOnline(isOnline: Boolean): Result<Unit> {
         prefs.setCraftsmanOnline(isOnline)
         val session = prefs.userSessionFlow.first()
-        if (session.role == UserRole.CRAFTSMAN) {
+        if (session.role == UserRole.CRAFTSMAN && requiresCloudSyncFor(session)) {
             val coord = MoroccanLocations.coordForCity(session.city)
-            supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
+            val res = supabaseMarketplaceRepo?.upsertCraftsmanDirectory(session, coord.lat, coord.lng)
+                ?: Result.success(Unit)
+            if (isOnline) {
+                refreshMarketplaceNow()
+            }
+            return res
         }
+        return Result.success(Unit)
     }
 
     suspend fun setCity(city: String) {
@@ -550,7 +566,20 @@ class HirafiRepository(
     }
 
     suspend fun setSpecialty(specialtyId: String): Boolean {
-        return prefs.setSpecialty(specialtyId)
+        val updated = prefs.setSpecialty(specialtyId)
+        if (updated) {
+            val session = prefs.userSessionFlow.first()
+            if (session.role == UserRole.CRAFTSMAN && requiresCloudSyncFor(session)) {
+                val coord = MoroccanLocations.coordForCity(session.city)
+                supabaseMarketplaceRepo?.upsertCraftsmanDirectory(
+                    session = session.copy(craftsmanSpecialtyId = specialtyId, isCraftsmanSpecialtyLocked = true),
+                    lat = coord.lat,
+                    lng = coord.lng
+                )
+                refreshMarketplaceNow()
+            }
+        }
+        return updated
     }
 
     suspend fun updateProfile(
@@ -846,14 +875,58 @@ class HirafiRepository(
         return Result.success(domain)
     }
 
+    private fun requiresCloudSyncFor(session: UserSession): Boolean =
+        supabaseMarketplaceRepo != null &&
+            (isSupabaseAuthenticated || session.authProvider == "supabase" || session.authProvider == "google")
+
+    private suspend fun ensureActiveCloudUid(session: UserSession): String {
+        if (supabaseSessionManager?.currentUidOrNull == null) {
+            supabaseSessionManager?.restoreSavedSession()
+        }
+        return supabaseSessionManager?.currentUidOrNull
+            ?: throw IllegalStateException("انتهت جلسة الاتصال بـ Supabase، يرجى تسجيل الدخول من جديد")
+    }
+
+    private suspend fun executeCloudMutationWithProfileHeal(
+        session: UserSession,
+        block: suspend () -> Result<Unit>
+    ): Result<Unit> {
+        var result = block()
+        if (result.isFailure && supabaseUserRepo != null) {
+            val healResult = supabaseUserRepo.syncOrRestoreProfile(
+                fullName = session.fullName,
+                email = session.email,
+                city = session.city,
+                chosenRole = session.role.dbValue,
+                chosenSpecialtyId = session.craftsmanSpecialtyId
+            )
+            if (healResult.isSuccess) {
+                result = block()
+            }
+        }
+        return result
+    }
+
     suspend fun raiseRequestPrice(requestId: String, newPrice: Int) {
         val existing = dao.getRequestById(requestId) ?: return
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
         val updated = existing.copy(
             proposedPrice = newPrice,
             updatedAtMillis = System.currentTimeMillis()
         )
         dao.upsertRequest(updated)
-        supabaseMarketplaceRepo?.updateProposedPrice(requestId, newPrice)
+        if (requiresCloud) {
+            val cloudResult = supabaseMarketplaceRepo!!.updateProposedPrice(requestId, newPrice)
+            if (cloudResult.isFailure) {
+                dao.upsertRequest(existing)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر تحديث السعر في Supabase")
+            }
+        }
         if (!isSupabaseAuthenticated && updated.status == RequestStatus.SEARCHING.dbValue) {
             simulateQuickPriceBoostOffer(requestId, existing.categoryId, existing.lat, existing.lng, newPrice)
         }
@@ -1003,14 +1076,18 @@ class HirafiRepository(
     ) {
         val session = prefs.userSessionFlow.first()
         require(session.isCraftsmanSpecialtyLocked) { "يجب تأكيد مهنتك الوحيدة أولاً" }
-        val req = dao.getRequestById(requestId) ?: return
+        val req = dao.getRequestById(requestId)
+            ?: throw IllegalStateException("لم يعد هذا الطلب متاحاً")
         require(req.categoryId == session.craftsmanSpecialtyId) { "لا يمكنك تقديم عرض لطلب خارج مهنتك" }
+        val requiresCloud = requiresCloudSyncFor(session)
+        val activeUid = if (requiresCloud) ensureActiveCloudUid(session) else session.userId
+
         val specialty = HirafiCategories.byId(session.craftsmanSpecialtyId)
         val now = System.currentTimeMillis()
         val offer = ServiceOfferEntity(
             id = UUID.randomUUID().toString(),
             requestId = requestId,
-            craftsmanId = session.userId,
+            craftsmanId = activeUid,
             craftsmanName = session.fullName,
             craftsmanPhone = session.phone,
             craftsmanRating = 4.9,
@@ -1025,41 +1102,73 @@ class HirafiRepository(
             expiresAtMillis = now + 60_000L
         )
         dao.upsertOffer(offer)
-        supabaseMarketplaceRepo?.submitOffer(offer.toDomain(), req.clientId)
+        if (requiresCloud) {
+            val cloudResult = executeCloudMutationWithProfileHeal(session) {
+                supabaseMarketplaceRepo!!.submitOffer(offer.toDomain(), req.clientId)
+            }
+            if (cloudResult.isFailure) {
+                dao.deleteOfferById(offer.id)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر إرسال العرض إلى Supabase")
+            }
+        }
     }
 
     suspend fun craftsmanDirectAcceptRequest(requestId: String) {
-        val req = dao.getRequestById(requestId) ?: return
+        val req = dao.getRequestById(requestId)
+            ?: throw IllegalStateException("لم يعد هذا الطلب متاحاً")
         val session = prefs.userSessionFlow.first()
         require(session.isCraftsmanSpecialtyLocked) { "يجب تأكيد مهنتك الوحيدة أولاً" }
         require(req.categoryId == session.craftsmanSpecialtyId) { "لا يمكنك قبول طلب خارج مهنتك" }
+        val requiresCloud = requiresCloudSyncFor(session)
+        val activeUid = if (requiresCloud) ensureActiveCloudUid(session) else session.userId
+
         val now = System.currentTimeMillis()
         val updated = req.copy(
             status = RequestStatus.ACCEPTED.dbValue,
             acceptedPrice = req.proposedPrice,
-            assignedCraftsmanId = session.userId,
+            assignedCraftsmanId = activeUid,
             assignedCraftsmanName = session.fullName,
             assignedCraftsmanPhone = session.phone,
             assignedCraftsmanRating = 4.9,
             updatedAtMillis = now
         )
         dao.upsertRequest(updated)
-        supabaseMarketplaceRepo?.directAcceptRequestAsCraftsman(
-            requestId = requestId,
-            acceptedPrice = req.proposedPrice,
-            session = session
-        )
-        insertSystemWelcomeMessage(
-            requestId = requestId,
-            senderId = session.userId,
-            senderName = session.fullName,
-            role = UserRole.CRAFTSMAN,
-            text = "تم قبول طلبك بسعر ${req.proposedPrice} درهم. أنا متوجه إليك الآن!"
-        )
+        if (requiresCloud) {
+            val cloudResult = executeCloudMutationWithProfileHeal(session) {
+                supabaseMarketplaceRepo!!.directAcceptRequestAsCraftsman(
+                    requestId = requestId,
+                    acceptedPrice = req.proposedPrice,
+                    session = session.copy(userId = activeUid)
+                )
+            }
+            if (cloudResult.isFailure) {
+                dao.upsertRequest(req)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر قبول الطلب في Supabase")
+            }
+        }
+        runCatching {
+            insertSystemWelcomeMessage(
+                requestId = requestId,
+                senderId = activeUid,
+                senderName = session.fullName,
+                role = UserRole.CRAFTSMAN,
+                text = "تم قبول طلبك بسعر ${req.proposedPrice} درهم. أنا متوجه إليك الآن!"
+            )
+        }
     }
 
     suspend fun acceptOffer(offer: ServiceOffer) {
-        val req = dao.getRequestById(offer.requestId) ?: return
+        val req = dao.getRequestById(offer.requestId)
+            ?: throw IllegalStateException("لم يعد الطلب موجوداً")
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
+
+        val previousOffer = dao.getOfferById(offer.id)
         val now = System.currentTimeMillis()
         val updatedOffer = ServiceOfferEntity(
             id = offer.id,
@@ -1078,9 +1187,6 @@ class HirafiRepository(
             createdAtMillis = offer.createdAtMillis,
             expiresAtMillis = offer.expiresAtMillis
         )
-        dao.upsertOffer(updatedOffer)
-        dao.declineOtherOffers(offer.requestId, offer.id)
-
         val updatedReq = req.copy(
             status = RequestStatus.ACCEPTED.dbValue,
             acceptedPrice = offer.offeredPrice,
@@ -1090,32 +1196,62 @@ class HirafiRepository(
             assignedCraftsmanRating = offer.craftsmanRating,
             updatedAtMillis = now
         )
+        dao.upsertOffer(updatedOffer)
+        dao.declineOtherOffers(offer.requestId, offer.id)
         dao.upsertRequest(updatedReq)
 
-        supabaseMarketplaceRepo?.acceptOffer(offer)
+        if (requiresCloud) {
+            val cloudResult = supabaseMarketplaceRepo!!.acceptOffer(offer)
+            if (cloudResult.isFailure) {
+                if (previousOffer != null) dao.upsertOffer(previousOffer)
+                dao.upsertRequest(req)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر قبول العرض في Supabase")
+            }
+        }
 
-        insertSystemWelcomeMessage(
-            requestId = req.id,
-            senderId = req.clientId,
-            senderName = req.clientName,
-            role = UserRole.CLIENT,
-            text = "تم قبول عرض ${offer.craftsmanName} بسعر ${offer.offeredPrice} درهم، بانتظار الوصول خلال ${offer.etaMinutes} دقائق."
-        )
+        runCatching {
+            insertSystemWelcomeMessage(
+                requestId = req.id,
+                senderId = req.clientId,
+                senderName = req.clientName,
+                role = UserRole.CLIENT,
+                text = "تم قبول عرض ${offer.craftsmanName} بسعر ${offer.offeredPrice} درهم، بانتظار الوصول خلال ${offer.etaMinutes} دقائق."
+            )
+        }
     }
 
     suspend fun declineOffer(offerId: String) {
         val offer = dao.getOfferById(offerId) ?: return
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
         dao.upsertOffer(offer.copy(status = OfferStatus.DECLINED.dbValue))
-        supabaseMarketplaceRepo?.updateOfferStatusOrCounter(
-            offerId = offerId,
-            status = OfferStatus.DECLINED,
-            offeredPrice = offer.offeredPrice,
-            note = offer.note,
-            expiresAtMillis = offer.expiresAtMillis
-        )
+        if (requiresCloud) {
+            val cloudResult = supabaseMarketplaceRepo!!.updateOfferStatusOrCounter(
+                offerId = offerId,
+                status = OfferStatus.DECLINED,
+                offeredPrice = offer.offeredPrice,
+                note = offer.note,
+                expiresAtMillis = offer.expiresAtMillis
+            )
+            if (cloudResult.isFailure) {
+                dao.upsertOffer(offer)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر رفض العرض في Supabase")
+            }
+        }
     }
 
     suspend fun counterOffer(offer: ServiceOffer, counterPrice: Int) {
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
+        val previousOffer = dao.getOfferById(offer.id)
         val newExpires = System.currentTimeMillis() + 45_000L
         val noteText = "عرض مضاد من الزبون: $counterPrice درهم"
         val updated = ServiceOfferEntity(
@@ -1136,13 +1272,20 @@ class HirafiRepository(
             expiresAtMillis = newExpires
         )
         dao.upsertOffer(updated)
-        supabaseMarketplaceRepo?.updateOfferStatusOrCounter(
-            offerId = offer.id,
-            status = OfferStatus.COUNTERED,
-            offeredPrice = counterPrice,
-            note = noteText,
-            expiresAtMillis = newExpires
-        )
+        if (requiresCloud) {
+            val cloudResult = supabaseMarketplaceRepo!!.updateOfferStatusOrCounter(
+                offerId = offer.id,
+                status = OfferStatus.COUNTERED,
+                offeredPrice = counterPrice,
+                note = noteText,
+                expiresAtMillis = newExpires
+            )
+            if (cloudResult.isFailure) {
+                if (previousOffer != null) dao.upsertOffer(previousOffer)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر إرسال العرض المضاد إلى Supabase")
+            }
+        }
         if (!isSupabaseAuthenticated || offer.craftsmanId.startsWith("c_")) {
             repoScope.launch {
                 delay(1400L)
@@ -1165,9 +1308,21 @@ class HirafiRepository(
 
     suspend fun advanceJobStatus(requestId: String, nextStatus: RequestStatus) {
         val req = dao.getRequestById(requestId) ?: return
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
         val updated = req.copy(status = nextStatus.dbValue, updatedAtMillis = System.currentTimeMillis())
         dao.upsertRequest(updated)
-        supabaseMarketplaceRepo?.advanceRequestStatus(requestId, nextStatus)
+        if (requiresCloud) {
+            val cloudResult = supabaseMarketplaceRepo!!.advanceRequestStatus(requestId, nextStatus)
+            if (cloudResult.isFailure) {
+                dao.upsertRequest(req)
+                throw cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر تحديث حالة الطلب في Supabase")
+            }
+        }
     }
 
     suspend fun cancelRequest(requestId: String) {
@@ -1178,9 +1333,11 @@ class HirafiRepository(
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        val activeUid = if (requiresCloud) ensureActiveCloudUid(session) else session.userId
         insertSystemWelcomeMessage(
             requestId = requestId,
-            senderId = session.userId,
+            senderId = activeUid,
             senderName = session.fullName,
             role = session.role,
             text = trimmed
@@ -1204,7 +1361,14 @@ class HirafiRepository(
             createdAtMillis = System.currentTimeMillis()
         )
         dao.insertMessage(msg)
-        supabaseMarketplaceRepo?.sendChatMessage(msg.toDomain())
+        val session = prefs.userSessionFlow.first()
+        if (requiresCloudSyncFor(session)) {
+            val cloudRes = supabaseMarketplaceRepo!!.sendChatMessage(msg.toDomain())
+            if (cloudRes.isFailure) {
+                throw cloudRes.exceptionOrNull()
+                    ?: IllegalStateException("تعذر إرسال الرسالة إلى Supabase")
+            }
+        }
     }
 
     suspend fun submitReview(
@@ -1214,6 +1378,11 @@ class HirafiRepository(
         tags: List<String>,
         comment: String
     ) {
+        val session = prefs.userSessionFlow.first()
+        val requiresCloud = requiresCloudSyncFor(session)
+        if (requiresCloud) {
+            ensureActiveCloudUid(session)
+        }
         val review = ReviewEntity(
             id = UUID.randomUUID().toString(),
             requestId = requestId,
@@ -1224,7 +1393,13 @@ class HirafiRepository(
             createdAtMillis = System.currentTimeMillis()
         )
         dao.insertReview(review)
-        supabaseMarketplaceRepo?.submitReview(review.toDomain())
+        if (requiresCloud) {
+            val cloudRes = supabaseMarketplaceRepo!!.submitReview(review.toDomain())
+            if (cloudRes.isFailure) {
+                throw cloudRes.exceptionOrNull()
+                    ?: IllegalStateException("تعذر حفظ التقييم في Supabase")
+            }
+        }
     }
 
     suspend fun publishCraftsmanLiveLocation(lat: Double, lng: Double, activeRequestId: String? = null) {

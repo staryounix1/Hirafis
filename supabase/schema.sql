@@ -114,7 +114,8 @@ alter table public.profiles add column if not exists lat double precision not nu
 alter table public.profiles add column if not exists lng double precision not null default -7.6324;
 
 -- Secure Public Craftsman Discovery View (Excludes private phone & email to protect user privacy)
-create or replace view public.craftsman_discovery_view as
+drop view if exists public.craftsman_discovery_view cascade;
+create view public.craftsman_discovery_view as
 select
   id,
   full_name,
@@ -307,27 +308,27 @@ as $fn$
 begin
   if auth.uid() is not null and not public.is_admin() then
     -- If client is updating their own request
-    if auth.uid() = old.client_id then
+    if auth.uid()::text = old.client_id::text then
       -- Client cannot assign craftsman directly without a real offer or admin override
       if new.assigned_craftsman_id is distinct from old.assigned_craftsman_id and new.assigned_craftsman_id is not null then
         if not exists (
           select 1 from public.service_offers o
-          where o.request_id = old.id
-            and o.craftsman_id = new.assigned_craftsman_id
+          where o.request_id::text = old.id::text
+            and o.craftsman_id::text = new.assigned_craftsman_id::text
             and o.status in ('pending', 'countered', 'accepted')
         ) then
           raise exception 'Cannot assign craftsman without an existing offer';
         end if;
       end if;
     -- If craftsman is updating
-    elsif auth.uid() = old.assigned_craftsman_id then
+    elsif auth.uid()::text = old.assigned_craftsman_id::text then
       -- Craftsman cannot alter financial proposal or client ID
       new.client_id := old.client_id;
       new.proposed_price := old.proposed_price;
       new.client_name := old.client_name;
     else
       -- Non-participant trying to update request
-      if old.status = 'searching' and new.status = 'accepted' and new.assigned_craftsman_id = auth.uid() then
+      if old.status = 'searching' and new.status = 'accepted' and new.assigned_craftsman_id::text = auth.uid()::text then
         -- Allowed for direct craftsman acceptance if offer/acceptance rules met
         null;
       else
@@ -430,21 +431,21 @@ drop policy if exists "Users update own profile" on public.profiles;
 
 create policy "Users read own profile or admin"
   on public.profiles for select
-  using (auth.uid() = id or public.is_admin());
+  using (auth.uid()::text = id::text or public.is_admin());
 
 create policy "Users insert own profile"
   on public.profiles for insert
   with check (
-    auth.uid() = id
+    auth.uid()::text = id::text
     and (role in ('client', 'craftsman') or (role = 'admin' and public.is_admin()))
   );
 
 create policy "Users update own profile"
   on public.profiles for update
-  using (auth.uid() = id or public.is_admin())
+  using (auth.uid()::text = id::text or public.is_admin())
   with check (
     public.is_admin()
-    or (auth.uid() = id and role in ('client', 'craftsman'))
+    or (auth.uid()::text = id::text and role in ('client', 'craftsman'))
   );
 
 -- verification_submissions (KYC): ONLY owner craftsman or Admin
@@ -453,14 +454,14 @@ drop policy if exists "Craftsmen submit own verification" on public.verification
 drop policy if exists "Craftsmen update own verification" on public.verification_submissions;
 create policy "Users read own or admin verification"
   on public.verification_submissions for select
-  using (auth.uid() = craftsman_id or public.is_admin());
+  using (auth.uid()::text = craftsman_id::text or public.is_admin());
 create policy "Craftsmen submit own verification"
   on public.verification_submissions for insert
-  with check (auth.uid() = craftsman_id and status = 'pending_review');
+  with check (auth.uid()::text = craftsman_id::text and status = 'pending_review');
 create policy "Craftsmen update own verification"
   on public.verification_submissions for update
-  using (auth.uid() = craftsman_id or public.is_admin())
-  with check (public.is_admin() or (auth.uid() = craftsman_id and status = 'pending_review'));
+  using (auth.uid()::text = craftsman_id::text or public.is_admin())
+  with check (public.is_admin() or (auth.uid()::text = craftsman_id::text and status = 'pending_review'));
 
 -- portfolio_items
 drop policy if exists "Authenticated read portfolio" on public.portfolio_items;
@@ -470,8 +471,8 @@ create policy "Authenticated read portfolio"
   using (auth.role() = 'authenticated');
 create policy "Craftsmen manage own portfolio"
   on public.portfolio_items for all
-  using (auth.uid() = craftsman_id or public.is_admin())
-  with check (auth.uid() = craftsman_id or public.is_admin());
+  using (auth.uid()::text = craftsman_id::text or public.is_admin())
+  with check (auth.uid()::text = craftsman_id::text or public.is_admin());
 
 -- service_requests: searching requests visible to authenticated; accepted/assigned requests visible ONLY to client, assigned craftsman, or admin
 drop policy if exists "Authenticated read requests" on public.service_requests;
@@ -481,24 +482,24 @@ create policy "Authenticated read requests"
   on public.service_requests for select
   using (
     status = 'searching'
-    or auth.uid() = client_id
-    or auth.uid() = assigned_craftsman_id
+    or auth.uid()::text = client_id::text
+    or auth.uid()::text = assigned_craftsman_id::text
     or public.is_admin()
   );
 create policy "Authenticated insert requests"
   on public.service_requests for insert
-  with check (auth.uid() = client_id);
+  with check (auth.uid()::text = client_id::text);
 create policy "Participants update requests"
   on public.service_requests for update
   using (
-    auth.uid() = client_id
-    or auth.uid() = assigned_craftsman_id
+    auth.uid()::text = client_id::text
+    or auth.uid()::text = assigned_craftsman_id::text
     or status = 'searching'
     or public.is_admin()
   )
   with check (
-    auth.uid() = client_id
-    or auth.uid() = assigned_craftsman_id
+    auth.uid()::text = client_id::text
+    or auth.uid()::text = assigned_craftsman_id::text
     or public.is_admin()
   );
 
@@ -509,34 +510,34 @@ drop policy if exists "Participants update offers" on public.service_offers;
 create policy "Authenticated read offers"
   on public.service_offers for select
   using (
-    auth.uid() = craftsman_id
-    or auth.uid() = client_id
+    auth.uid()::text = craftsman_id::text
+    or auth.uid()::text = client_id::text
     or exists (
       select 1 from public.service_requests r
-      where r.id = request_id and r.client_id = auth.uid()
+      where r.id::text = request_id::text and r.client_id::text = auth.uid()::text
     )
     or public.is_admin()
   );
 create policy "Craftsmen insert offers"
   on public.service_offers for insert
-  with check (auth.uid() = craftsman_id);
+  with check (auth.uid()::text = craftsman_id::text);
 create policy "Participants update offers"
   on public.service_offers for update
   using (
-    auth.uid() = craftsman_id
-    or auth.uid() = client_id
+    auth.uid()::text = craftsman_id::text
+    or auth.uid()::text = client_id::text
     or exists (
       select 1 from public.service_requests r
-      where r.id = request_id and r.client_id = auth.uid()
+      where r.id::text = request_id::text and r.client_id::text = auth.uid()::text
     )
     or public.is_admin()
   )
   with check (
-    auth.uid() = craftsman_id
-    or auth.uid() = client_id
+    auth.uid()::text = craftsman_id::text
+    or auth.uid()::text = client_id::text
     or exists (
       select 1 from public.service_requests r
-      where r.id = request_id and r.client_id = auth.uid()
+      where r.id::text = request_id::text and r.client_id::text = auth.uid()::text
     )
     or public.is_admin()
   );
@@ -550,30 +551,30 @@ create policy "Participants read chat"
     public.is_admin()
     or exists (
       select 1 from public.service_requests r
-      where r.id = request_id
-        and (r.client_id = auth.uid() or r.assigned_craftsman_id = auth.uid())
+      where r.id::text = request_id::text
+        and (r.client_id::text = auth.uid()::text or r.assigned_craftsman_id::text = auth.uid()::text)
     )
     or exists (
       select 1 from public.service_offers o
-      where o.request_id = chat_messages.request_id
-        and o.craftsman_id = auth.uid()
+      where o.request_id::text = chat_messages.request_id::text
+        and o.craftsman_id::text = auth.uid()::text
     )
   );
 create policy "Participants insert chat"
   on public.chat_messages for insert
   with check (
-    sender_id = auth.uid()::text
+    sender_id::text = auth.uid()::text
     and (
       public.is_admin()
       or exists (
         select 1 from public.service_requests r
-        where r.id = request_id
-          and (r.client_id = auth.uid() or r.assigned_craftsman_id = auth.uid())
+        where r.id::text = request_id::text
+          and (r.client_id::text = auth.uid()::text or r.assigned_craftsman_id::text = auth.uid()::text)
       )
       or exists (
         select 1 from public.service_offers o
-        where o.request_id = chat_messages.request_id
-          and o.craftsman_id = auth.uid()
+        where o.request_id::text = chat_messages.request_id::text
+          and o.craftsman_id::text = auth.uid()::text
       )
     )
   );
@@ -587,10 +588,10 @@ create policy "Authenticated read reviews"
 create policy "Clients insert reviews"
   on public.reviews for insert
   with check (
-    auth.uid() = client_id
+    auth.uid()::text = client_id::text
     and exists (
       select 1 from public.service_requests r
-      where r.id = request_id and r.client_id = auth.uid()
+      where r.id::text = request_id::text and r.client_id::text = auth.uid()::text
     )
   );
 

@@ -51,7 +51,7 @@ class SupabaseSessionManager(
             expiresAtMillis = saved.supabaseExpiresAtMillis
         )
         _authState.value = state
-        return refreshSessionIfNeeded(force = false) ?: state
+        return refreshSessionIfNeeded(force = false)
     }
 
     suspend fun signInWithGoogleIdToken(idToken: String): Result<SupabaseAuthState> {
@@ -122,8 +122,10 @@ class SupabaseSessionManager(
     }
 
     suspend fun getValidBearerToken(): String? {
-        val current = _authState.value ?: restoreSavedSession() ?: return null
-        val active = refreshSessionIfNeeded(force = false) ?: current
+        if (_authState.value == null) {
+            restoreSavedSession()
+        }
+        val active = refreshSessionIfNeeded(force = false) ?: return null
         return "Bearer ${active.accessToken}"
     }
 
@@ -133,7 +135,15 @@ class SupabaseSessionManager(
             val now = System.currentTimeMillis()
             val needsRefresh = force || (current.expiresAtMillis in 1L..now + 60_000L)
             if (!needsRefresh) return@withLock current
-            val refreshToken = current.refreshToken?.takeIf { it.isNotBlank() } ?: return@withLock current
+            val refreshToken = current.refreshToken?.takeIf { it.isNotBlank() }
+            if (refreshToken == null) {
+                if (current.expiresAtMillis in 1L..now) {
+                    _authState.value = null
+                    prefs.clearSupabaseAuth()
+                    return@withLock null
+                }
+                return@withLock current
+            }
             val api = SupabaseClientProvider.getApiServiceOrNull() ?: return@withLock current
             val res = runCatching {
                 api.refreshSession(
@@ -149,6 +159,9 @@ class SupabaseSessionManager(
                 }
             } else if (res.code() == 400 || res.code() == 401) {
                 Log.w(TAG, "Refresh token rejected (${res.code()}), clearing session")
+                _authState.value = null
+                prefs.clearSupabaseAuth()
+                return@withLock null
             }
             current
         }

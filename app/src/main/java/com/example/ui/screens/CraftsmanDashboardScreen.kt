@@ -86,7 +86,9 @@ import com.example.data.model.HirafiCategories
 import com.example.data.model.JobHandshakeSecurity
 import com.example.data.model.LiveRouteState
 import com.example.data.model.MoroccanLocations
+import com.example.data.model.OfferStatus
 import com.example.data.model.RequestStatus
+import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.remote.MapRoutingService
@@ -119,6 +121,7 @@ fun CraftsmanDashboardScreen(
     val liveRoute by viewModel.liveRoute.collectAsStateWithLifecycle()
     val trackingState by viewModel.trackingState.collectAsStateWithLifecycle()
     val cloudSyncError by viewModel.cloudRequestsSyncError.collectAsStateWithLifecycle()
+    val craftsmanOffersByRequest by viewModel.craftsmanSubmittedOffers.collectAsStateWithLifecycle()
 
     var isMapMode by remember { mutableStateOf(false) }
     var selectedMapRequest by remember { mutableStateOf<ServiceRequest?>(null) }
@@ -150,6 +153,17 @@ fun CraftsmanDashboardScreen(
         }
     }
 
+    LaunchedEffect(
+        session.userId,
+        session.craftsmanSpecialtyId,
+        session.isCraftsmanOnline,
+        session.isCraftsmanSpecialtyLocked
+    ) {
+        if (session.isCraftsmanOnline && session.isCraftsmanSpecialtyLocked) {
+            viewModel.refreshCraftsmanRequests()
+        }
+    }
+
     val completedToday = allRequests.filter {
         it.status == RequestStatus.COMPLETED &&
             it.assignedCraftsmanId == session.userId &&
@@ -158,6 +172,9 @@ fun CraftsmanDashboardScreen(
     val totalEarningsDh = completedToday.sumOf { it.acceptedPrice ?: it.proposedPrice }
     val cityCoord = MoroccanLocations.coordForCity(session.city)
     val lockedCategory = HirafiCategories.byId(session.craftsmanSpecialtyId)
+    val localGpsOrCity = userGps?.takeIf { gps ->
+        MapRoutingService.haversineKm(gps.first, gps.second, cityCoord.lat, cityCoord.lng) <= 150.0
+    } ?: (cityCoord.lat to cityCoord.lng)
 
     Column(
         modifier = Modifier
@@ -332,6 +349,32 @@ fun CraftsmanDashboardScreen(
                 Spacer(Modifier.width(8.dp))
 
                 Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .size(48.dp)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                ) {
+                    IconButton(
+                        onClick = {
+                            viewModel.refreshCraftsmanRequests()
+                            viewModel.showMessage("تم تحديث قائمة الطلبات")
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("craftsman_header_refresh_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "تحديث الطلبات",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Surface(
                     color = ObsidianBlack,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
@@ -367,9 +410,15 @@ fun CraftsmanDashboardScreen(
                             add(activeCraftsmanJob)
                         }
                     }
+                    val mapCenterLat = activeCraftsmanJob?.lat
+                        ?: openRequests.firstOrNull()?.lat
+                        ?: localGpsOrCity.first
+                    val mapCenterLng = activeCraftsmanJob?.lng
+                        ?: openRequests.firstOrNull()?.lng
+                        ?: localGpsOrCity.second
                     HirafiRealMap(
-                        centerLat = activeCraftsmanJob?.lat ?: userGps?.first ?: cityCoord.lat,
-                        centerLng = activeCraftsmanJob?.lng ?: userGps?.second ?: cityCoord.lng,
+                        centerLat = mapCenterLat,
+                        centerLng = mapCenterLng,
                         cameraTarget = cameraTarget,
                         onCameraTargetConsumed = { viewModel.consumeCameraTarget() },
                         selectedCategoryId = session.craftsmanSpecialtyId,
@@ -443,14 +492,15 @@ fun CraftsmanDashboardScreen(
                                     }
                                 }
                                 val distKm = MapRoutingService.haversineKm(
-                                    userGps?.first ?: cityCoord.lat,
-                                    userGps?.second ?: cityCoord.lng,
+                                    localGpsOrCity.first,
+                                    localGpsOrCity.second,
                                     overlayRequest.lat,
                                     overlayRequest.lng
                                 )
                                 InDriveDriverRequestCard(
                                     request = overlayRequest,
                                     distanceKm = distKm,
+                                    existingOffer = craftsmanOffersByRequest[overlayRequest.id],
                                     onAcceptAtPrice = {
                                         viewModel.craftsmanAcceptAtClientPrice(overlayRequest.id)
                                         selectedMapRequest = null
@@ -662,14 +712,15 @@ fun CraftsmanDashboardScreen(
                     } else {
                         items(openRequests, key = { it.id }) { req ->
                             val distKm = MapRoutingService.haversineKm(
-                                userGps?.first ?: cityCoord.lat,
-                                userGps?.second ?: cityCoord.lng,
+                                localGpsOrCity.first,
+                                localGpsOrCity.second,
                                 req.lat,
                                 req.lng
                             )
                             InDriveDriverRequestCard(
                                 request = req,
                                 distanceKm = distKm,
+                                existingOffer = craftsmanOffersByRequest[req.id],
                                 onAcceptAtPrice = { viewModel.craftsmanAcceptAtClientPrice(req.id) },
                                 onQuickCounter = { delta ->
                                     viewModel.craftsmanSubmitCounterOffer(
@@ -848,6 +899,7 @@ private fun DriverStatCard(title: String, value: String, modifier: Modifier = Mo
 private fun InDriveDriverRequestCard(
     request: ServiceRequest,
     distanceKm: Double,
+    existingOffer: ServiceOffer? = null,
     onAcceptAtPrice: () -> Unit,
     onQuickCounter: (Int) -> Unit,
     onCustomBid: () -> Unit
@@ -971,6 +1023,52 @@ private fun InDriveDriverRequestCard(
                             text = request.description,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (existingOffer != null && existingOffer.status != OfferStatus.DECLINED) {
+                val (badgeBg, badgeTextColor, badgeLabel) = when (existingOffer.status) {
+                    OfferStatus.COUNTERED -> Triple(
+                        UrgentCoralSoft,
+                        UrgentCoral,
+                        "عرض مضاد من الزبون: ${existingOffer.offeredPrice} د.م — اضغط للرد"
+                    )
+                    OfferStatus.ACCEPTED -> Triple(
+                        VerifiedEmeraldSoft,
+                        VerifiedEmerald,
+                        "وافق الزبون على عرضك (${existingOffer.offeredPrice} د.م)!"
+                    )
+                    else -> Triple(
+                        ElectricLimeSoft,
+                        ObsidianBlack,
+                        "تم إرسال عرضك (${existingOffer.offeredPrice} د.م) • بانتظار رد الزبون"
+                    )
+                }
+                Surface(
+                    color = badgeBg,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCustomBid() }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = badgeTextColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = badgeLabel,
+                            color = badgeTextColor,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
                         )
                     }
                 }
