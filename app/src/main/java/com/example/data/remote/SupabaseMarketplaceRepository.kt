@@ -16,15 +16,21 @@ import com.example.data.model.UserSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import kotlin.math.roundToInt
 
 class SupabaseMarketplaceRepository(
     private val sessionManager: SupabaseSessionManager
 ) {
     private val refreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 24)
+    private val _lastRequestsSyncError = MutableStateFlow<String?>(null)
+    val lastRequestsSyncError: StateFlow<String?> = _lastRequestsSyncError.asStateFlow()
 
     val isAuthenticated: Boolean
         get() = sessionManager.isAuthenticated
@@ -35,36 +41,88 @@ class SupabaseMarketplaceRepository(
         refreshSignal.tryEmit(Unit)
     }
 
+    fun clearRequestsSyncError() {
+        _lastRequestsSyncError.value = null
+    }
+
     // -------------------------------------------------------------------------
     // Real-time Polling Flows over Supabase PostgREST
     // -------------------------------------------------------------------------
 
     fun observeClientRequests(): Flow<List<ServiceRequest>> = pollingFlow(3000L) { api, bearer, uid ->
-        val res = api.getServiceRequests(
-            apiKey = SupabaseConfig.anonKey,
-            bearer = bearer,
-            clientIdFilter = "eq.$uid"
-        )
-        if (res.isSuccessful) res.body().orEmpty().map { it.toDomain() } else null
+        try {
+            val res = api.getServiceRequests(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                clientIdFilter = "eq.$uid"
+            )
+            if (res.isSuccessful) {
+                _lastRequestsSyncError.value = null
+                res.body().orEmpty().map { it.toDomain() }
+            } else {
+                val msg = formatHttpError("تعذر جلب طلباتك", res.code(), res.errorBody()?.string())
+                _lastRequestsSyncError.value = msg
+                Log.w(TAG, msg)
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val msg = "تعذر الاتصال بالسحابة لجلب طلباتك: ${e.localizedMessage ?: "خطأ شبكة"}"
+            _lastRequestsSyncError.value = msg
+            Log.w(TAG, msg, e)
+            null
+        }
     }
 
     fun observeCraftsmanAssignedRequests(): Flow<List<ServiceRequest>> = pollingFlow(3000L) { api, bearer, uid ->
-        val res = api.getServiceRequests(
-            apiKey = SupabaseConfig.anonKey,
-            bearer = bearer,
-            assignedCraftsmanIdFilter = "eq.$uid"
-        )
-        if (res.isSuccessful) res.body().orEmpty().map { it.toDomain() } else null
+        try {
+            val res = api.getServiceRequests(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                assignedCraftsmanIdFilter = "eq.$uid"
+            )
+            if (res.isSuccessful) {
+                res.body().orEmpty().map { it.toDomain() }
+            } else {
+                val msg = formatHttpError("تعذر جلب مهامك الجارية", res.code(), res.errorBody()?.string())
+                _lastRequestsSyncError.value = msg
+                Log.w(TAG, msg)
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "observeCraftsmanAssignedRequests failed: ${e.message}")
+            null
+        }
     }
 
     fun observeSearchingRequests(specialtyId: String): Flow<List<ServiceRequest>> = pollingFlow(3000L) { api, bearer, _ ->
-        val res = api.getServiceRequests(
-            apiKey = SupabaseConfig.anonKey,
-            bearer = bearer,
-            statusFilter = "eq.${RequestStatus.SEARCHING.dbValue}",
-            categoryIdFilter = "eq.$specialtyId"
-        )
-        if (res.isSuccessful) res.body().orEmpty().map { it.toDomain() } else null
+        try {
+            val res = api.getServiceRequests(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                statusFilter = "eq.${RequestStatus.SEARCHING.dbValue}",
+                categoryIdFilter = "eq.$specialtyId"
+            )
+            if (res.isSuccessful) {
+                _lastRequestsSyncError.value = null
+                res.body().orEmpty().map { it.toDomain() }
+            } else {
+                val msg = formatHttpError("تعذر جلب الطلبات المتاحة", res.code(), res.errorBody()?.string())
+                _lastRequestsSyncError.value = msg
+                Log.w(TAG, msg)
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val msg = "تعذر الاتصال بالسحابة لتحديث الطلبات: ${e.localizedMessage ?: "خطأ شبكة"}"
+            _lastRequestsSyncError.value = msg
+            Log.w(TAG, msg, e)
+            null
+        }
     }
 
     fun observeRequestLiveCoords(requestId: String): Flow<Pair<Double, Double>?> = pollingFlow(2500L) { api, bearer, _ ->
@@ -124,10 +182,9 @@ class SupabaseMarketplaceRepository(
 
     fun observeOnlineCraftsmen(centerLat: Double, centerLng: Double): Flow<List<CraftsmanPin>> =
         pollingFlow(5000L) { api, bearer, _ ->
-            val res = api.getProfilesByFilter(
+            val res = api.getCraftsmanDiscoveryPins(
                 apiKey = SupabaseConfig.anonKey,
                 bearer = bearer,
-                roleFilter = "eq.craftsman",
                 onlineFilter = "eq.true"
             )
             if (res.isSuccessful) {
@@ -175,9 +232,12 @@ class SupabaseMarketplaceRepository(
     // -------------------------------------------------------------------------
 
     suspend fun createServiceRequest(req: ServiceRequest): Result<Unit> {
-        val uid = currentUidOrNull() ?: return Result.success(Unit)
-        val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
-        val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
+        val uid = currentUidOrNull()
+            ?: return Result.failure(IllegalStateException("انتهت جلسة الدخول في Supabase، يرجى إعادة تسجيل الدخول"))
+        val bearer = sessionManager.getValidBearerToken()
+            ?: return Result.failure(IllegalStateException("تعذر التحقق من رمز الجلسة في Supabase"))
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
             val res = api.createServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
@@ -201,15 +261,20 @@ class SupabaseMarketplaceRepository(
                 )
             )
             if (res.isSuccessful) {
+                _lastRequestsSyncError.value = null
                 triggerRefresh()
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("تعذر إنشاء الطلب في Supabase (${res.code()})"))
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                val msg = formatHttpError("تعذر إرسال الطلب إلى Supabase", res.code(), rawErr)
+                Log.e(TAG, "createServiceRequest failed (${res.code()}): $rawErr")
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, msg))
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "createServiceRequest exception", e)
+            Result.failure(IllegalStateException("تعذر إرسال الطلب للسحابة: ${e.localizedMessage ?: "تحقق من الإنترنت"}"))
         }
     }
 
@@ -240,6 +305,14 @@ class SupabaseMarketplaceRepository(
         val bearer = sessionManager.getValidBearerToken() ?: return Result.success(Unit)
         val api = SupabaseClientProvider.getApiServiceOrNull() ?: return Result.success(Unit)
         return try {
+            runCatching {
+                api.patchOffer(
+                    apiKey = SupabaseConfig.anonKey,
+                    bearer = bearer,
+                    idFilter = "eq.${offer.id}",
+                    patch = SupabaseOfferPatchDto(status = OfferStatus.ACCEPTED.dbValue)
+                )
+            }
             val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
                 bearer = bearer,
@@ -253,14 +326,6 @@ class SupabaseMarketplaceRepository(
                     assignedCraftsmanRating = offer.craftsmanRating.coerceIn(1.0, 5.0)
                 )
             )
-            runCatching {
-                api.patchOffer(
-                    apiKey = SupabaseConfig.anonKey,
-                    bearer = bearer,
-                    idFilter = "eq.${offer.id}",
-                    patch = SupabaseOfferPatchDto(status = OfferStatus.ACCEPTED.dbValue)
-                )
-            }
             if (res.isSuccessful) {
                 triggerRefresh()
                 Result.success(Unit)
@@ -720,7 +785,29 @@ class SupabaseMarketplaceRepository(
         createdAtMillis = SupabaseTimestampParser.parseIsoToMillis(createdAt)
     )
 
+    private fun formatHttpError(prefix: String, code: Int, rawBody: String?): String {
+        val parsed = runCatching {
+            val json = JSONObject(rawBody.orEmpty())
+            listOf(json.optString("message"), json.optString("details"), json.optString("hint"))
+                .firstOrNull { it.isNotBlank() }
+                .orEmpty()
+        }.getOrNull().orEmpty()
+        return when {
+            code == 401 -> "$prefix: انتهت جلسة Supabase (401)، أعد تسجيل الدخول"
+            code == 403 -> "$prefix: الصلاحيات مرفوضة في RLS (403)"
+            code == 404 -> "$prefix: جدول service_requests غير موجود أو Schema Cache قديم (404)"
+            parsed.isNotBlank() -> "$prefix ($code): ${parsed.take(120)}"
+            else -> "$prefix ($code)"
+        }
+    }
+
     companion object {
         private const val TAG = "SupabaseMarketplace"
     }
 }
+
+class SupabaseRequestUploadException(
+    val statusCode: Int,
+    val rawBody: String,
+    message: String
+) : IllegalStateException(message)

@@ -24,24 +24,24 @@ language sql
 stable
 security definer
 set search_path = public
-as $$
+as $fn$
   select lower(coalesce(auth.jwt() ->> 'email', '')) = 'youness065220@gmail.com'
       or exists (
         select 1
         from public.authorized_admins a
         where lower(a.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
       );
-$$;
+$fn$;
 
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
-as $$
+as $fn$
 begin
   new.updated_at = now();
   return new;
 end;
-$$;
+$fn$;
 
 -- ============================================================================
 -- 2. App Runtime Config (Production Mode Toggle)
@@ -94,6 +94,25 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
+-- Idempotent column upgrades in case profiles already existed from an earlier version
+alter table public.profiles add column if not exists role_locked boolean not null default false;
+alter table public.profiles add column if not exists specialty_id text not null default 'plumbing';
+alter table public.profiles add column if not exists specialty text not null default 'سباكة';
+alter table public.profiles add column if not exists avatar_uri text;
+alter table public.profiles add column if not exists bio text not null default 'حرفي معتمد ومجهز بأحدث الأدوات الاحترافية';
+alter table public.profiles add column if not exists experience_years integer not null default 5;
+alter table public.profiles add column if not exists base_price_dh integer not null default 120;
+alter table public.profiles add column if not exists rating numeric(3,2) not null default 4.90;
+alter table public.profiles add column if not exists completed_jobs integer not null default 0;
+alter table public.profiles add column if not exists is_online boolean not null default false;
+alter table public.profiles add column if not exists is_verified boolean not null default false;
+alter table public.profiles add column if not exists verification_status text not null default 'not_submitted';
+alter table public.profiles add column if not exists rejection_reason text not null default '';
+alter table public.profiles add column if not exists is_suspended boolean not null default false;
+alter table public.profiles add column if not exists fcm_token text not null default '';
+alter table public.profiles add column if not exists lat double precision not null default 33.5822;
+alter table public.profiles add column if not exists lng double precision not null default -7.6324;
+
 -- Secure Public Craftsman Discovery View (Excludes private phone & email to protect user privacy)
 create or replace view public.craftsman_discovery_view as
 select
@@ -119,13 +138,16 @@ select
 from public.profiles
 where role = 'craftsman' and not is_suspended;
 
+revoke all on public.craftsman_discovery_view from anon;
+grant select on public.craftsman_discovery_view to authenticated;
+
 -- Trigger to protect sensitive profile privilege columns
 create or replace function public.protect_profile_privilege_columns()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $fn$
 begin
   if auth.uid() is not null and not public.is_admin() then
     if old.role_locked = true then
@@ -154,7 +176,7 @@ begin
   end if;
   return new;
 end;
-$$;
+$fn$;
 
 drop trigger if exists trg_profiles_protect_privileges on public.profiles;
 create trigger trg_profiles_protect_privileges
@@ -236,52 +258,17 @@ create table if not exists public.service_requests (
   updated_at timestamptz not null default now()
 );
 
--- Tamper-proof trigger for service requests state machine & offer consistency
-create or replace function public.protect_service_request_mutations()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if auth.uid() is not null and not public.is_admin() then
-    -- If client is updating their own request
-    if auth.uid() = old.client_id then
-      -- Client cannot assign craftsman directly without an accepted offer or admin override
-      if new.assigned_craftsman_id is distinct from old.assigned_craftsman_id and new.assigned_craftsman_id is not null then
-        if not exists (
-          select 1 from public.service_offers o
-          where o.request_id = old.id
-            and o.craftsman_id = new.assigned_craftsman_id
-            and o.status = 'accepted'
-        ) then
-          raise exception 'Cannot assign craftsman without an accepted offer';
-        end if;
-      end if;
-    -- If craftsman is updating
-    elsif auth.uid() = old.assigned_craftsman_id then
-      -- Craftsman cannot alter financial proposal or client ID
-      new.client_id := old.client_id;
-      new.proposed_price := old.proposed_price;
-      new.client_name := old.client_name;
-    else
-      -- Non-participant trying to update request
-      if old.status = 'searching' and new.status = 'accepted' and new.assigned_craftsman_id = auth.uid() then
-        -- Allowed for direct craftsman acceptance if offer/acceptance rules met
-        null;
-      else
-        raise exception 'Unauthorized request state mutation';
-      end if;
-    end if;
-  end if;
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_service_requests_tamper_proof on public.service_requests;
-create trigger trg_service_requests_tamper_proof
-  before update on public.service_requests
-  for each row execute function public.protect_service_request_mutations();
+-- Idempotent column upgrades for service_requests
+alter table public.service_requests add column if not exists accepted_price integer;
+alter table public.service_requests add column if not exists payment_method text not null default 'cash';
+alter table public.service_requests add column if not exists is_urgent boolean not null default true;
+alter table public.service_requests add column if not exists assigned_craftsman_id uuid references public.profiles(id) on delete set null;
+alter table public.service_requests add column if not exists assigned_craftsman_name text;
+alter table public.service_requests add column if not exists assigned_craftsman_phone text;
+alter table public.service_requests add column if not exists assigned_craftsman_rating numeric(3,2);
+alter table public.service_requests add column if not exists craftsman_lat double precision;
+alter table public.service_requests add column if not exists craftsman_lng double precision;
+alter table public.service_requests add column if not exists photo_uri text;
 
 drop trigger if exists trg_service_requests_updated_at on public.service_requests;
 create trigger trg_service_requests_updated_at
@@ -309,6 +296,53 @@ create table if not exists public.service_offers (
   expires_at_millis bigint not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Tamper-proof trigger for service requests state machine & offer consistency
+create or replace function public.protect_service_request_mutations()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+begin
+  if auth.uid() is not null and not public.is_admin() then
+    -- If client is updating their own request
+    if auth.uid() = old.client_id then
+      -- Client cannot assign craftsman directly without a real offer or admin override
+      if new.assigned_craftsman_id is distinct from old.assigned_craftsman_id and new.assigned_craftsman_id is not null then
+        if not exists (
+          select 1 from public.service_offers o
+          where o.request_id = old.id
+            and o.craftsman_id = new.assigned_craftsman_id
+            and o.status in ('pending', 'countered', 'accepted')
+        ) then
+          raise exception 'Cannot assign craftsman without an existing offer';
+        end if;
+      end if;
+    -- If craftsman is updating
+    elsif auth.uid() = old.assigned_craftsman_id then
+      -- Craftsman cannot alter financial proposal or client ID
+      new.client_id := old.client_id;
+      new.proposed_price := old.proposed_price;
+      new.client_name := old.client_name;
+    else
+      -- Non-participant trying to update request
+      if old.status = 'searching' and new.status = 'accepted' and new.assigned_craftsman_id = auth.uid() then
+        -- Allowed for direct craftsman acceptance if offer/acceptance rules met
+        null;
+      else
+        raise exception 'Unauthorized request state mutation';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$fn$;
+
+drop trigger if exists trg_service_requests_tamper_proof on public.service_requests;
+create trigger trg_service_requests_tamper_proof
+  before update on public.service_requests
+  for each row execute function public.protect_service_request_mutations();
 
 -- ============================================================================
 -- 8. Chat Messages
@@ -641,3 +675,6 @@ create policy "Hirafi KYC owner or admin delete"
     bucket_id = 'hirafi-kyc'
     and (auth.uid()::text = (storage.foldername(name))[1] or public.is_admin())
   );
+
+-- Reload PostgREST schema cache immediately so /rest/v1/* endpoints stop returning 404
+NOTIFY pgrst, 'reload schema';

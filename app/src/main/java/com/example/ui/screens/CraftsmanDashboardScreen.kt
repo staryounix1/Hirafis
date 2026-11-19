@@ -47,8 +47,10 @@ import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -116,6 +118,7 @@ fun CraftsmanDashboardScreen(
     val cameraTarget by viewModel.cameraTarget.collectAsStateWithLifecycle()
     val liveRoute by viewModel.liveRoute.collectAsStateWithLifecycle()
     val trackingState by viewModel.trackingState.collectAsStateWithLifecycle()
+    val cloudSyncError by viewModel.cloudRequestsSyncError.collectAsStateWithLifecycle()
 
     var isMapMode by remember { mutableStateOf(false) }
     var selectedMapRequest by remember { mutableStateOf<ServiceRequest?>(null) }
@@ -542,6 +545,53 @@ fun CraftsmanDashboardScreen(
                         }
                     }
 
+                    if (cloudSyncError != null) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = UrgentCoralSoft),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, UrgentCoral.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Warning, contentDescription = null, tint = UrgentCoral)
+                                        Text(
+                                            text = "مشكلة في مزامنة الطلبات",
+                                            fontWeight = FontWeight.Bold,
+                                            color = UrgentCoral,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = cloudSyncError.orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ObsidianBlack
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.refreshCraftsmanRequests()
+                                            viewModel.showMessage("جاري إعادة المحاولة...")
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.testTag("craftsman_retry_sync_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (!session.isCraftsmanOnline) {
                         item {
                             Card(
@@ -581,16 +631,31 @@ fun CraftsmanDashboardScreen(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(28.dp)
+                                        .padding(24.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Icon(Icons.Rounded.Schedule, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(42.dp))
-                                    Spacer(Modifier.height(10.dp))
                                     Text("لا توجد طلبات جديدة في تخصص ${lockedCategory.nameAr}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                     Text(
-                                        text = "حسابك مقتصر على مهنة ${lockedCategory.nameAr} فقط، وسيظهر أي طلب جديد هنا فوراً.",
+                                        text = "يتم عرض طلبات مهنة (${lockedCategory.nameAr}) فقط. تأكد من أن الزبون اختار تخصص ${lockedCategory.nameAr} عند إرسال الطلب.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    Spacer(Modifier.height(4.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.refreshCraftsmanRequests()
+                                            viewModel.showMessage("جاري فحص الطلبات الجديدة في السحابة...")
+                                        },
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier
+                                            .height(48.dp)
+                                            .testTag("craftsman_refresh_requests_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("تحديث الطلبات الآن", fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }

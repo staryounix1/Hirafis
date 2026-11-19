@@ -223,8 +223,11 @@ class HirafiViewModel(
     private var lastCraftsmenCenter: Pair<Double, Double>? = null
 
     private val _previewedCraftsmanId = MutableStateFlow<String?>(null)
+    private val _isSubmittingRequest = MutableStateFlow(false)
+    val isSubmittingRequest: StateFlow<Boolean> = _isSubmittingRequest.asStateFlow()
 
     val supabaseAuthState: StateFlow<SupabaseAuthState?> = repository.supabaseAuthStateFlow
+    val cloudRequestsSyncError: StateFlow<String?> = repository.cloudRequestsSyncError
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val myPortfolio: StateFlow<List<PortfolioItem>> = userSession
@@ -948,40 +951,53 @@ class HirafiViewModel(
         submitServiceRequest(preferredCraftsmanId = pin.id)
     }
 
+    fun refreshCraftsmanRequests() {
+        repository.refreshMarketplaceNow()
+    }
+
     fun submitServiceRequest(preferredCraftsmanId: String? = null) {
         if (userSession.value.isSuspended) {
             showMessage("تم تعليق هذا الحساب مؤقتاً من طرف الإدارة")
             return
         }
+        if (_isSubmittingRequest.value) return
         val current = _draft.value
         val radiusKm = _searchRadiusKm.value
         val isProduction = _appRuntimeConfig.value.productionMode
         viewModelScope.launch {
-            val req = repository.createServiceRequest(
-                categoryId = current.selectedCategoryId,
-                title = current.title.ifBlank { "طلب ${HirafiCategories.byId(current.selectedCategoryId).nameAr}" },
-                description = current.description,
-                addressLabel = current.addressLabel,
-                lat = current.lat,
-                lng = current.lng,
-                mapX = 0.5f,
-                mapY = 0.5f,
-                proposedPrice = current.proposedPrice,
-                paymentMethod = current.paymentMethod,
-                isUrgent = current.isUrgent,
-                photoUri = current.photoUri,
-                preferredCraftsmanId = preferredCraftsmanId,
-                radiusKm = radiusKm,
-                productionMode = isProduction
-            )
-            _activeClientRequestId.value = req.id
-            _draft.update { it.copy(title = "", description = "", photoUri = null) }
-            val msg = if (preferredCraftsmanId != null) {
-                "تم إرسال طلب مباشر للحرفي المختار وللحرفيين القريبين!"
-            } else {
-                "تم إرسال طلبك! جاري استقبال عروض الحرفيين..."
+            _isSubmittingRequest.value = true
+            try {
+                repository.createServiceRequest(
+                    categoryId = current.selectedCategoryId,
+                    title = current.title.ifBlank { "طلب ${HirafiCategories.byId(current.selectedCategoryId).nameAr}" },
+                    description = current.description,
+                    addressLabel = current.addressLabel,
+                    lat = current.lat,
+                    lng = current.lng,
+                    mapX = 0.5f,
+                    mapY = 0.5f,
+                    proposedPrice = current.proposedPrice,
+                    paymentMethod = current.paymentMethod,
+                    isUrgent = current.isUrgent,
+                    photoUri = current.photoUri,
+                    preferredCraftsmanId = preferredCraftsmanId,
+                    radiusKm = radiusKm,
+                    productionMode = isProduction
+                ).onSuccess { req ->
+                    _activeClientRequestId.value = req.id
+                    _draft.update { it.copy(title = "", description = "", photoUri = null) }
+                    val msg = if (preferredCraftsmanId != null) {
+                        "تم إرسال طلب مباشر للحرفي المختار وللحرفيين القريبين!"
+                    } else {
+                        "تم إرسال طلبك! جاري استقبال عروض الحرفيين..."
+                    }
+                    showMessage(msg)
+                }.onFailure { err ->
+                    showMessage(err.message ?: "تعذر إرسال الطلب إلى Supabase، تحقق من الاتصال وأعد المحاولة")
+                }
+            } finally {
+                _isSubmittingRequest.value = false
             }
-            showMessage(msg)
         }
     }
 
@@ -1501,8 +1517,9 @@ class HirafiViewModel(
             when (role) {
                 UserRole.CLIENT -> {
                     launch {
+                        val clientUid = supabaseAuthState.value?.uid ?: userSession.value.userId
                         repository.observeCloudClientRequests().collect { list ->
-                            repository.cacheRemoteRequests(list)
+                            repository.cacheClientRequests(clientUid, list)
                         }
                     }
                     launch {
@@ -1560,7 +1577,7 @@ class HirafiViewModel(
                         var baselineReady = false
                         val seenReqIds = mutableSetOf<String>()
                         repository.observeCloudSearchingRequests(specialtyId).collect { list ->
-                            repository.cacheRemoteRequests(list)
+                            repository.cacheSearchingRequestsForCategory(specialtyId, list)
                             if (!baselineReady) {
                                 seenReqIds.addAll(list.map { it.id })
                                 baselineReady = true

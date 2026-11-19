@@ -62,6 +62,14 @@ interface SupabaseApiService {
         @Query("order") order: String = "created_at.desc"
     ): Response<List<SupabaseProfileDto>>
 
+    @GET("rest/v1/craftsman_discovery_view?select=id,full_name,city,role,specialty_id,specialty,avatar_uri,bio,experience_years,base_price_dh,rating,completed_jobs,is_online,is_verified,verification_status,is_suspended,lat,lng,created_at")
+    suspend fun getCraftsmanDiscoveryPins(
+        @Header("apikey") apiKey: String,
+        @Header("Authorization") bearer: String,
+        @Query("is_online") onlineFilter: String = "eq.true",
+        @Query("order") order: String = "rating.desc"
+    ): Response<List<SupabaseProfileDto>>
+
     @Headers("Prefer: resolution=merge-duplicates,return=representation")
     @POST("rest/v1/profiles")
     suspend fun upsertProfile(

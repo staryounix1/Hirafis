@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -20,6 +21,37 @@ interface HirafiDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRequests(requests: List<ServiceRequestEntity>)
+
+    @Query("DELETE FROM service_requests WHERE id = :requestId")
+    suspend fun deleteRequestById(requestId: String)
+
+    @Query("DELETE FROM service_requests WHERE status = 'searching' AND categoryId = :categoryId")
+    suspend fun deleteSearchingRequestsByCategory(categoryId: String)
+
+    @Transaction
+    suspend fun replaceSearchingRequestsForCategory(
+        categoryId: String,
+        requests: List<ServiceRequestEntity>
+    ) {
+        deleteSearchingRequestsByCategory(categoryId)
+        if (requests.isNotEmpty()) {
+            upsertRequests(requests)
+        }
+    }
+
+    @Query("DELETE FROM service_requests WHERE clientId = :clientId")
+    suspend fun deleteRequestsByClient(clientId: String)
+
+    @Transaction
+    suspend fun replaceRequestsForClient(
+        clientId: String,
+        requests: List<ServiceRequestEntity>
+    ) {
+        deleteRequestsByClient(clientId)
+        if (requests.isNotEmpty()) {
+            upsertRequests(requests)
+        }
+    }
 
     @Query("SELECT * FROM service_offers WHERE requestId = :requestId ORDER BY createdAtMillis DESC")
     fun observeOffersForRequest(requestId: String): Flow<List<ServiceOfferEntity>>
@@ -68,4 +100,20 @@ interface HirafiDao {
 
     @Query("DELETE FROM service_requests WHERE id LIKE 'req_seed_%'")
     suspend fun clearSeededRequests()
+
+    @Query("DELETE FROM service_requests")
+    suspend fun clearAllRequests()
+
+    @Query("DELETE FROM service_offers")
+    suspend fun clearAllOffers()
+
+    @Query("DELETE FROM chat_messages")
+    suspend fun clearAllMessages()
+
+    @Transaction
+    suspend fun clearMarketplaceCache() {
+        clearAllMessages()
+        clearAllOffers()
+        clearAllRequests()
+    }
 }

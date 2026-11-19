@@ -132,6 +132,7 @@ fun ClientHomeScreen(
 ) {
     val context = LocalContext.current
     val draft by viewModel.draft.collectAsStateWithLifecycle()
+    val isSubmittingRequest by viewModel.isSubmittingRequest.collectAsStateWithLifecycle()
     val filteredCraftsmen by viewModel.filteredNearbyCraftsmen.collectAsStateWithLifecycle()
     val craftsmanSearchQuery by viewModel.craftsmanSearchQuery.collectAsStateWithLifecycle()
     val searchRadiusKm by viewModel.searchRadiusKm.collectAsStateWithLifecycle()
@@ -443,6 +444,7 @@ fun ClientHomeScreen(
 
                                     Button(
                                         onClick = { viewModel.submitServiceRequest() },
+                                        enabled = !isSubmittingRequest,
                                         shape = RoundedCornerShape(16.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = ElectricLime,
@@ -453,13 +455,27 @@ fun ClientHomeScreen(
                                             .height(48.dp)
                                             .testTag("collapsed_find_craftsman_button")
                                     ) {
-                                        Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            text = "ابحث بـ ${draft.proposedPrice} د.م",
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 14.sp
-                                        )
+                                        if (isSubmittingRequest) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                color = ObsidianBlack,
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "جاري الإرسال...",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 14.sp
+                                            )
+                                        } else {
+                                            Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "ابحث بـ ${draft.proposedPrice} د.م",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 14.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -728,6 +744,7 @@ fun ClientHomeScreen(
 
                                     Button(
                                         onClick = { viewModel.submitServiceRequest() },
+                                        enabled = !isSubmittingRequest,
                                         shape = RoundedCornerShape(18.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = ElectricLime,
@@ -738,13 +755,27 @@ fun ClientHomeScreen(
                                             .height(54.dp)
                                             .testTag("find_craftsman_button")
                                     ) {
-                                        Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(22.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            text = "البحث عن حرفي بـ ${draft.proposedPrice} د.م",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
+                                        if (isSubmittingRequest) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(20.dp),
+                                                color = ObsidianBlack,
+                                                strokeWidth = 2.5.dp
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                text = "جاري إرسال طلبك...",
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        } else {
+                                            Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(22.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                text = "البحث عن حرفي بـ ${draft.proposedPrice} د.م",
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
                                     }
                                 }
                             }

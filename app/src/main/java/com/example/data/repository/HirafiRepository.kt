@@ -64,14 +64,22 @@ class HirafiRepository(
 ) {
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val fallbackAuthStateFlow = MutableStateFlow<SupabaseAuthState?>(null).asStateFlow()
+    private val fallbackSyncErrorFlow = MutableStateFlow<String?>(null).asStateFlow()
 
     val userSession: Flow<UserSession> = prefs.userSessionFlow
 
     val supabaseAuthStateFlow: StateFlow<SupabaseAuthState?>
         get() = supabaseSessionManager?.authState ?: fallbackAuthStateFlow
 
+    val cloudRequestsSyncError: StateFlow<String?>
+        get() = supabaseMarketplaceRepo?.lastRequestsSyncError ?: fallbackSyncErrorFlow
+
     val isSupabaseAuthenticated: Boolean
         get() = supabaseMarketplaceRepo?.isAuthenticated == true
+
+    fun refreshMarketplaceNow() {
+        supabaseMarketplaceRepo?.triggerRefresh()
+    }
 
     fun getCraftsmenAround(centerLat: Double = 33.5822, centerLng: Double = -7.6324): List<CraftsmanPin> =
         computeCraftsmenAround(centerLat, centerLng)
@@ -127,6 +135,14 @@ class HirafiRepository(
     suspend fun cacheRemoteRequests(requests: List<ServiceRequest>) {
         if (requests.isEmpty()) return
         dao.upsertRequests(requests.map { it.toEntity() })
+    }
+
+    suspend fun cacheSearchingRequestsForCategory(categoryId: String, requests: List<ServiceRequest>) {
+        dao.replaceSearchingRequestsForCategory(categoryId, requests.map { it.toEntity() })
+    }
+
+    suspend fun cacheClientRequests(clientId: String, requests: List<ServiceRequest>) {
+        dao.replaceRequestsForClient(clientId, requests.map { it.toEntity() })
     }
 
     suspend fun cacheRemoteOffers(offers: List<ServiceOffer>) {
@@ -268,10 +284,26 @@ class HirafiRepository(
     suspend fun restoreSupabaseSession(): Result<UserSession?> {
         val manager = supabaseSessionManager ?: return Result.success(null)
         val restored = manager.restoreSavedSession() ?: return Result.success(null)
-        return restoreExistingSupabaseProfileIfLocked(
+        val result = restoreExistingSupabaseProfileIfLocked(
             uid = restored.uid,
             fallbackEmail = restored.email
         )
+        val restoredSession = result.getOrNull()
+        if (result.isSuccess && restoredSession == null) {
+            val savedLocal = prefs.userSessionFlow.first()
+            if (savedLocal.isRoleLocked && savedLocal.userId == restored.uid && supabaseUserRepo != null) {
+                return applySyncedSupabaseProfile(
+                    authState = restored,
+                    displayName = savedLocal.fullName,
+                    fallbackEmail = restored.email.ifBlank { savedLocal.email },
+                    city = savedLocal.city,
+                    preferredRole = savedLocal.role,
+                    preferredSpecialtyId = savedLocal.craftsmanSpecialtyId,
+                    authProvider = savedLocal.authProvider
+                )
+            }
+        }
+        return result
     }
 
     suspend fun completeGoogleSupabaseLogin(
@@ -726,8 +758,19 @@ class HirafiRepository(
         preferredCraftsmanId: String? = null,
         radiusKm: Int = 5,
         productionMode: Boolean = false
-    ): ServiceRequest {
+    ): Result<ServiceRequest> {
         val session = prefs.userSessionFlow.first()
+        val requiresCloudSync = supabaseMarketplaceRepo != null &&
+            (isSupabaseAuthenticated || session.authProvider == "supabase" || session.authProvider == "google")
+
+        if (requiresCloudSync && supabaseSessionManager?.currentUidOrNull == null) {
+            supabaseSessionManager?.restoreSavedSession()
+        }
+        val activeUid = supabaseSessionManager?.currentUidOrNull
+        if (requiresCloudSync && activeUid == null) {
+            return Result.failure(IllegalStateException("انتهت جلسة الاتصال بـ Supabase، يرجى تسجيل الدخول من جديد"))
+        }
+
         val category = HirafiCategories.byId(categoryId)
         val now = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
@@ -735,9 +778,10 @@ class HirafiRepository(
             supabaseStorageService.uploadRequestPhoto(requestId, photoUri).getOrNull() ?: photoUri
         } else photoUri
         val resolvedTitle = title.trim().let { if (it.length < 2) "طلب ${category.nameAr}" else it }
+        val effectiveClientId = activeUid ?: session.userId
         val entity = ServiceRequestEntity(
             id = requestId,
-            clientId = session.userId,
+            clientId = effectiveClientId,
             clientName = session.fullName,
             categoryId = category.id,
             categoryName = category.nameAr,
@@ -763,7 +807,29 @@ class HirafiRepository(
         )
         val domain = entity.toDomain()
         dao.upsertRequest(entity)
-        supabaseMarketplaceRepo?.createServiceRequest(domain)
+
+        if (requiresCloudSync) {
+            var cloudResult = supabaseMarketplaceRepo!!.createServiceRequest(domain)
+            if (cloudResult.isFailure && supabaseUserRepo != null) {
+                // Auto-heal missing public.profiles row (FK 23503 / 409) before retrying once
+                val healResult = supabaseUserRepo.syncOrRestoreProfile(
+                    fullName = session.fullName,
+                    email = session.email,
+                    city = session.city,
+                    chosenRole = session.role.dbValue,
+                    chosenSpecialtyId = session.craftsmanSpecialtyId
+                )
+                if (healResult.isSuccess) {
+                    cloudResult = supabaseMarketplaceRepo.createServiceRequest(domain)
+                }
+            }
+            if (cloudResult.isFailure) {
+                dao.deleteRequestById(requestId)
+                val err = cloudResult.exceptionOrNull()
+                    ?: IllegalStateException("تعذر إرسال الطلب إلى Supabase")
+                return Result.failure(err)
+            }
+        }
 
         val isSeededSampleTarget = preferredCraftsmanId != null && preferredCraftsmanId.startsWith("c_")
         if (!productionMode && (!isSupabaseAuthenticated || isSeededSampleTarget)) {
@@ -777,7 +843,7 @@ class HirafiRepository(
                 radiusKm = radiusKm
             )
         }
-        return domain
+        return Result.success(domain)
     }
 
     suspend fun raiseRequestPrice(requestId: String, newPrice: Int) {
@@ -1249,6 +1315,7 @@ class HirafiRepository(
     suspend fun logoutAccount() {
         supabaseSessionManager?.signOut()
         prefs.logoutAccount()
+        dao.clearMarketplaceCache()
     }
 
     private fun ServiceRequest.toEntity() = ServiceRequestEntity(
