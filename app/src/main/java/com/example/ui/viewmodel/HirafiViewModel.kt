@@ -474,16 +474,33 @@ class HirafiViewModel(
         }
     }
 
+    private fun isValidRegionalCoord(lat: Double, lng: Double, refLat: Double, refLng: Double): Boolean {
+        if (lat == 0.0 && lng == 0.0) return false
+        return MapRoutingService.haversineKm(lat, lng, refLat, refLng) <= 150.0
+    }
+
     private fun startLiveRouteTracking(req: ServiceRequest) {
         trackingJob?.cancel()
         trackingJob = viewModelScope.launch {
             val isCraftsman = userSession.value.role == UserRole.CRAFTSMAN
             val hasPerm = locationService?.hasLocationPermission() == true
-            val gps = _userGpsLocation.value
-            val assignedPin = _nearbyCraftsmen.value.firstOrNull { it.id == req.assignedCraftsmanId }
+            val gps = _userGpsLocation.value?.takeIf { isValidRegionalCoord(it.first, it.second, req.lat, req.lng) }
+            val cityCoord = MoroccanLocations.coordForCity(userSession.value.city)
+            val assignedPin = _liveCloudCraftsmen.value.firstOrNull { it.id == req.assignedCraftsmanId }
+                ?: _nearbyCraftsmen.value.firstOrNull { it.id == req.assignedCraftsmanId }
                 ?: _nearbyCraftsmen.value.firstOrNull()
-            val startLat = if (isCraftsman && gps != null) gps.first else (assignedPin?.lat ?: (req.lat + 0.009))
-            val startLng = if (isCraftsman && gps != null) gps.second else (assignedPin?.lng ?: (req.lng - 0.008))
+            val startLat = if (isCraftsman) {
+                gps?.first ?: cityCoord.lat
+            } else {
+                assignedPin?.lat?.takeIf { isValidRegionalCoord(it, assignedPin.lng, req.lat, req.lng) }
+                    ?: (req.lat + 0.008)
+            }
+            val startLng = if (isCraftsman) {
+                gps?.second ?: cityCoord.lng
+            } else {
+                assignedPin?.lng?.takeIf { isValidRegionalCoord(assignedPin.lat, it, req.lat, req.lng) }
+                    ?: (req.lng - 0.007)
+            }
 
             _trackingState.update {
                 it.copy(
@@ -510,15 +527,19 @@ class HirafiViewModel(
         val svc = locationService
         val hasPerm = svc?.hasLocationPermission() == true
         if (!hasPerm) {
-            // Compute initial route using known fallback so map stays informative until permission granted
+            // Compute initial route & push fallback city coord so the client immediately sees the craftsman on map
             val initialRoute = MapRoutingService.fetchDrivingRoute(fallbackLat, fallbackLng, req.lat, req.lng)
+            val distKm = MapRoutingService.haversineKm(fallbackLat, fallbackLng, req.lat, req.lng)
+            val arrivedOrWorking = req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS
+            val pts = if (initialRoute.points.size >= 2) initialRoute.points else listOf(fallbackLat to fallbackLng, req.lat to req.lng)
             _liveRoute.value = LiveRouteState(
-                routePoints = if (req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS) emptyList() else initialRoute.points,
+                routePoints = if (arrivedOrWorking) emptyList() else pts,
                 craftsmanLat = fallbackLat,
                 craftsmanLng = fallbackLng,
-                remainingDistanceKm = if (req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS) 0.0 else initialRoute.distanceKm,
-                etaMinutes = if (req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS) 0 else initialRoute.durationMinutes
+                remainingDistanceKm = if (arrivedOrWorking) 0.0 else maxOf(distKm, initialRoute.distanceKm),
+                etaMinutes = if (arrivedOrWorking) 0 else initialRoute.durationMinutes.coerceAtLeast(1)
             )
+            repository.publishCraftsmanLiveLocation(fallbackLat, fallbackLng, activeRequestId = req.id)
             _trackingState.update {
                 it.copy(
                     isTracking = true,
@@ -532,54 +553,65 @@ class HirafiViewModel(
 
         // Start foreground location service for continuous GPS tracking during active job (even during Google Maps navigation)
         if (req.status == RequestStatus.ACCEPTED || req.status == RequestStatus.EN_ROUTE) {
-            svc?.startForegroundJobTracking(req.id, req.title)
+            svc?.startForegroundJobTracking(req.id, req.title, req.lat, req.lng)
         } else {
             svc?.stopForegroundJobTracking()
         }
 
+        var lastValidLat = fallbackLat
+        var lastValidLng = fallbackLng
         var lastRoutedLat = fallbackLat
         var lastRoutedLng = fallbackLng
         var lastRouteFetchMs = 0L
         var lastSupabaseSyncMs = 0L
         var cachedPolyline: List<Pair<Double, Double>> = emptyList()
 
-        suspend fun applyCraftsmanFix(fix: RealTimeLocationSnapshot) {
-            _userGpsLocation.value = fix.lat to fix.lng
+        suspend fun applyCraftsmanFix(rawFix: RealTimeLocationSnapshot) {
+            val useRaw = isValidRegionalCoord(rawFix.lat, rawFix.lng, req.lat, req.lng)
+            val effectiveLat = if (useRaw) rawFix.lat else lastValidLat
+            val effectiveLng = if (useRaw) rawFix.lng else lastValidLng
+            if (useRaw) {
+                lastValidLat = effectiveLat
+                lastValidLng = effectiveLng
+            }
+            val effectiveFix = if (useRaw) rawFix else rawFix.copy(lat = effectiveLat, lng = effectiveLng)
+
+            _userGpsLocation.value = effectiveLat to effectiveLng
             _trackingState.update {
                 it.copy(
                     isTracking = true,
                     hasLocationPermission = true,
                     isForegroundServiceActive = LiveLocationBus.isForegroundServiceActive.value,
-                    latestFix = fix,
+                    latestFix = effectiveFix,
                     errorMessage = null
                 )
             }
 
-            val distKm = MapRoutingService.haversineKm(fix.lat, fix.lng, req.lat, req.lng)
-            val arrivedOrWorking = req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS || distKm <= 0.08
+            val distKm = MapRoutingService.haversineKm(effectiveLat, effectiveLng, req.lat, req.lng)
+            val arrivedOrWorking = req.status == RequestStatus.ARRIVED || req.status == RequestStatus.IN_PROGRESS
             val nowMs = System.currentTimeMillis()
-            val movedKm = MapRoutingService.haversineKm(lastRoutedLat, lastRoutedLng, fix.lat, fix.lng)
+            val movedKm = MapRoutingService.haversineKm(lastRoutedLat, lastRoutedLng, effectiveLat, effectiveLng)
 
             if (!arrivedOrWorking && (cachedPolyline.isEmpty() || movedKm >= 0.04 || nowMs - lastRouteFetchMs >= 12_000L)) {
-                lastRoutedLat = fix.lat
-                lastRoutedLng = fix.lng
+                lastRoutedLat = effectiveLat
+                lastRoutedLng = effectiveLng
                 lastRouteFetchMs = nowMs
-                val route = MapRoutingService.fetchDrivingRoute(fix.lat, fix.lng, req.lat, req.lng)
-                cachedPolyline = route.points
+                val route = MapRoutingService.fetchDrivingRoute(effectiveLat, effectiveLng, req.lat, req.lng)
+                cachedPolyline = if (route.points.size >= 2) route.points else listOf(effectiveLat to effectiveLng, req.lat to req.lng)
             }
 
-            val eta = if (arrivedOrWorking) 0 else RealTimeLocationService.computeEtaMinutes(distKm, fix.speedMps)
+            val eta = if (arrivedOrWorking) 0 else RealTimeLocationService.computeEtaMinutes(distKm, effectiveFix.speedMps).coerceAtLeast(1)
             _liveRoute.value = LiveRouteState(
                 routePoints = if (arrivedOrWorking) emptyList() else cachedPolyline,
-                craftsmanLat = fix.lat,
-                craftsmanLng = fix.lng,
+                craftsmanLat = effectiveLat,
+                craftsmanLng = effectiveLng,
                 remainingDistanceKm = if (arrivedOrWorking) 0.0 else distKm,
                 etaMinutes = eta
             )
 
-            if (nowMs - lastSupabaseSyncMs >= 5000L) {
+            if (nowMs - lastSupabaseSyncMs >= 4500L) {
                 lastSupabaseSyncMs = nowMs
-                repository.publishCraftsmanLiveLocation(fix.lat, fix.lng, activeRequestId = req.id)
+                repository.publishCraftsmanLiveLocation(effectiveLat, effectiveLng, activeRequestId = req.id)
             }
         }
 
@@ -621,117 +653,99 @@ class HirafiViewModel(
         initialCraftsmanLat: Double,
         initialCraftsmanLng: Double
     ) {
+        val assignedId = req.assignedCraftsmanId
+        val remoteSeed = assignedId
+            ?.takeIf { it.length == 36 }
+            ?.let { repository.fetchAssignedCraftsmanLocation(it) }
+            ?.takeIf { isValidRegionalCoord(it.first, it.second, req.lat, req.lng) }
+        val seedLat = remoteSeed?.first ?: initialCraftsmanLat
+        val seedLng = remoteSeed?.second ?: initialCraftsmanLng
+
         val route = MapRoutingService.fetchDrivingRoute(
-            startLat = initialCraftsmanLat,
-            startLng = initialCraftsmanLng,
+            startLat = seedLat,
+            startLng = seedLng,
             endLat = req.lat,
             endLng = req.lng
         )
-        val pts = route.points
-        if (pts.isEmpty()) return
+        val seedPts = if (route.points.size >= 2) route.points else listOf(seedLat to seedLng, req.lat to req.lng)
+        val isCloudTracked = !assignedId.isNullOrBlank() &&
+            !assignedId.startsWith("c_") &&
+            assignedId.length == 36 &&
+            SupabaseConfig.isConfigured
 
         when (req.status) {
-            RequestStatus.ACCEPTED -> {
-                val assignedId = req.assignedCraftsmanId
-                val isCloudCraftsman = !assignedId.isNullOrBlank() &&
-                    !assignedId.startsWith("c_") &&
-                    repository.isSupabaseAuthenticated
-                val remotePos = assignedId?.let { repository.fetchAssignedCraftsmanLocation(it) }
-                val cLat = remotePos?.first ?: pts.first().first
-                val cLng = remotePos?.second ?: pts.first().second
-                val activeRoute = if (remotePos != null) {
-                    MapRoutingService.fetchDrivingRoute(cLat, cLng, req.lat, req.lng)
-                } else route
-                _liveRoute.value = LiveRouteState(
-                    routePoints = activeRoute.points,
-                    craftsmanLat = cLat,
-                    craftsmanLng = cLng,
-                    remainingDistanceKm = activeRoute.distanceKm,
-                    etaMinutes = activeRoute.durationMinutes
-                )
-                if (isCloudCraftsman) {
-                    repository.observeCloudRequestLiveCoords(req.id).collect { liveCoord ->
-                        if (liveCoord != null) {
-                            val updatedRoute = MapRoutingService.fetchDrivingRoute(
-                                liveCoord.first, liveCoord.second, req.lat, req.lng
-                            )
-                            _liveRoute.value = LiveRouteState(
-                                routePoints = updatedRoute.points,
-                                craftsmanLat = liveCoord.first,
-                                craftsmanLng = liveCoord.second,
-                                remainingDistanceKm = updatedRoute.distanceKm,
-                                etaMinutes = updatedRoute.durationMinutes
-                            )
-                        }
-                    }
-                }
-            }
-            RequestStatus.EN_ROUTE -> {
-                val assignedId = req.assignedCraftsmanId
-                val isCloudCraftsman = !assignedId.isNullOrBlank() &&
-                    !assignedId.startsWith("c_") &&
-                    repository.isSupabaseAuthenticated
-                val isRemoteCraftsmanUuid = assignedId != null && assignedId.length == 36
-                if (isCloudCraftsman) {
+            RequestStatus.ACCEPTED, RequestStatus.EN_ROUTE -> {
+                if (isCloudTracked) {
+                    val seedDist = MapRoutingService.haversineKm(seedLat, seedLng, req.lat, req.lng)
+                    var lastRoutedLat = seedLat
+                    var lastRoutedLng = seedLng
+                    var lastRouteFetchMs = System.currentTimeMillis()
+                    var cachedPts = seedPts
+
                     _liveRoute.value = LiveRouteState(
-                        routePoints = pts,
-                        craftsmanLat = pts.first().first,
-                        craftsmanLng = pts.first().second,
-                        remainingDistanceKm = route.distanceKm,
-                        etaMinutes = route.durationMinutes
+                        routePoints = cachedPts,
+                        craftsmanLat = seedLat,
+                        craftsmanLng = seedLng,
+                        remainingDistanceKm = (seedDist * 10.0).roundToInt() / 10.0,
+                        etaMinutes = if (seedDist <= 0.08) 0 else route.durationMinutes.coerceAtLeast(1)
                     )
-                    repository.observeCloudRequestLiveCoords(req.id).collect { liveCoord ->
-                        if (liveCoord != null) {
-                            val dist = MapRoutingService.haversineKm(liveCoord.first, liveCoord.second, req.lat, req.lng)
-                            val updatedRoute = MapRoutingService.fetchDrivingRoute(liveCoord.first, liveCoord.second, req.lat, req.lng)
+
+                    repository.observeCloudRequestLiveCoords(req.id).collect { observedCoord ->
+                        val fallbackCoord = observedCoord ?: repository.fetchAssignedCraftsmanLocation(assignedId)
+                        val validCoord = fallbackCoord?.takeIf { isValidRegionalCoord(it.first, it.second, req.lat, req.lng) }
+                        if (validCoord != null) {
+                            val dist = MapRoutingService.haversineKm(validCoord.first, validCoord.second, req.lat, req.lng)
+                            val nowMs = System.currentTimeMillis()
+                            val movedKm = MapRoutingService.haversineKm(lastRoutedLat, lastRoutedLng, validCoord.first, validCoord.second)
+                            val activeRoute = if (cachedPts.isEmpty() || movedKm >= 0.04 || nowMs - lastRouteFetchMs >= 10_000L) {
+                                lastRoutedLat = validCoord.first
+                                lastRoutedLng = validCoord.second
+                                lastRouteFetchMs = nowMs
+                                val fetched = MapRoutingService.fetchDrivingRoute(validCoord.first, validCoord.second, req.lat, req.lng)
+                                cachedPts = if (fetched.points.size >= 2) fetched.points else listOf(validCoord.first to validCoord.second, req.lat to req.lng)
+                                fetched
+                            } else {
+                                MapRoutingService.fetchDrivingRoute(validCoord.first, validCoord.second, req.lat, req.lng)
+                            }
                             _liveRoute.value = LiveRouteState(
-                                routePoints = updatedRoute.points,
-                                craftsmanLat = liveCoord.first,
-                                craftsmanLng = liveCoord.second,
-                                remainingDistanceKm = if (dist <= 0.08) 0.0 else updatedRoute.distanceKm,
-                                etaMinutes = if (dist <= 0.08) 0 else updatedRoute.durationMinutes
+                                routePoints = cachedPts,
+                                craftsmanLat = validCoord.first,
+                                craftsmanLng = validCoord.second,
+                                remainingDistanceKm = if (dist <= 0.08) 0.0 else (dist * 10.0).roundToInt() / 10.0,
+                                etaMinutes = if (dist <= 0.08) 0 else activeRoute.durationMinutes.coerceAtLeast(1)
                             )
                         }
                     }
-                } else if (isRemoteCraftsmanUuid && SupabaseConfig.isConfigured) {
-                    // Real-time remote telemetry polling loop synced with craftsman's Play Services GPS
-                    while (true) {
-                        val liveCoord = repository.fetchAssignedCraftsmanLocation(assignedId)
-                            ?: LiveLocationBus.latestCraftsmanFix.value?.let { it.lat to it.lng }
-                        if (liveCoord != null) {
-                            val dist = MapRoutingService.haversineKm(liveCoord.first, liveCoord.second, req.lat, req.lng)
-                            val updatedRoute = MapRoutingService.fetchDrivingRoute(liveCoord.first, liveCoord.second, req.lat, req.lng)
-                            _liveRoute.value = LiveRouteState(
-                                routePoints = updatedRoute.points,
-                                craftsmanLat = liveCoord.first,
-                                craftsmanLng = liveCoord.second,
-                                remainingDistanceKm = if (dist <= 0.08) 0.0 else updatedRoute.distanceKm,
-                                etaMinutes = if (dist <= 0.08) 0 else updatedRoute.durationMinutes
-                            )
-                        }
-                        delay(4000L)
-                    }
+                } else if (req.status == RequestStatus.ACCEPTED) {
+                    val dist = MapRoutingService.haversineKm(seedLat, seedLng, req.lat, req.lng)
+                    _liveRoute.value = LiveRouteState(
+                        routePoints = seedPts,
+                        craftsmanLat = seedLat,
+                        craftsmanLng = seedLng,
+                        remainingDistanceKm = (dist * 10.0).roundToInt() / 10.0,
+                        etaMinutes = route.durationMinutes.coerceAtLeast(1)
+                    )
                 } else {
                     // Smooth route-following live progression for local/verified offline craftsmen
-                    val totalSteps = pts.size.coerceAtLeast(2)
+                    val totalSteps = seedPts.size.coerceAtLeast(2)
                     for (idx in 0 until totalSteps) {
                         val liveBusOverride = LiveLocationBus.latestCraftsmanFix.value
                         if (liveBusOverride != null && req.assignedCraftsmanId == userSession.value.userId) {
                             val dist = MapRoutingService.haversineKm(liveBusOverride.lat, liveBusOverride.lng, req.lat, req.lng)
                             _liveRoute.value = LiveRouteState(
-                                routePoints = pts.subList(idx, pts.size),
+                                routePoints = seedPts.subList(idx, seedPts.size),
                                 craftsmanLat = liveBusOverride.lat,
                                 craftsmanLng = liveBusOverride.lng,
                                 remainingDistanceKm = dist,
                                 etaMinutes = RealTimeLocationService.computeEtaMinutes(dist, liveBusOverride.speedMps)
                             )
                         } else {
-                            val currentPos = pts[idx]
+                            val currentPos = seedPts[idx]
                             val fractionRemaining = 1.0 - (idx.toDouble() / (totalSteps - 1).coerceAtLeast(1))
                             val remDist = ((route.distanceKm * fractionRemaining) * 10.0).roundToInt() / 10.0
                             val remEta = (route.durationMinutes * fractionRemaining).roundToInt().coerceAtLeast(1)
                             _liveRoute.value = LiveRouteState(
-                                routePoints = pts.subList(idx, pts.size),
+                                routePoints = seedPts.subList(idx, seedPts.size),
                                 craftsmanLat = currentPos.first,
                                 craftsmanLng = currentPos.second,
                                 remainingDistanceKm = remDist,

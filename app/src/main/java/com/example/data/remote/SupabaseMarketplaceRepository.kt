@@ -132,14 +132,35 @@ class SupabaseMarketplaceRepository(
             bearer = bearer,
             idFilter = "eq.$requestId"
         )
-        if (res.isSuccessful) {
-            val dto = res.body()?.firstOrNull()
-            if (dto?.craftsmanLat != null && dto.craftsmanLng != null) {
-                dto.craftsmanLat to dto.craftsmanLng
-            } else {
-                null
+        if (!res.isSuccessful) return@pollingFlow null
+        val dto = res.body()?.firstOrNull() ?: return@pollingFlow null
+        val cLat = dto.craftsmanLat
+        val cLng = dto.craftsmanLng
+        if (cLat != null && cLng != null &&
+            (cLat != 0.0 || cLng != 0.0) &&
+            MapRoutingService.haversineKm(cLat, cLng, dto.lat, dto.lng) <= 150.0
+        ) {
+            return@pollingFlow cLat to cLng
+        }
+        val craftsmanId = dto.assignedCraftsmanId
+        if (!craftsmanId.isNullOrBlank() && craftsmanId.length == 36) {
+            val viewRes = api.getCraftsmanDiscoveryPins(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = bearer,
+                idFilter = "eq.$craftsmanId",
+                onlineFilter = null
+            )
+            if (viewRes.isSuccessful) {
+                val pin = viewRes.body()?.firstOrNull()
+                if (pin != null &&
+                    (pin.lat != 0.0 || pin.lng != 0.0) &&
+                    MapRoutingService.haversineKm(pin.lat, pin.lng, dto.lat, dto.lng) <= 150.0
+                ) {
+                    return@pollingFlow pin.lat to pin.lng
+                }
             }
-        } else null
+        }
+        null
     }
 
     fun observeOffersForRequest(requestId: String, role: UserRole): Flow<List<ServiceOffer>> =
@@ -447,7 +468,7 @@ class SupabaseMarketplaceRepository(
         val api = SupabaseClientProvider.getApiServiceOrNull()
             ?: return Result.failure(IllegalStateException("إعدادات Supabase غير مكتملة"))
         return try {
-            api.patchServiceRequest(
+            val res = api.patchServiceRequest(
                 apiKey = SupabaseConfig.anonKey,
                 bearer = bearer,
                 idFilter = "eq.$requestId",
@@ -456,10 +477,17 @@ class SupabaseMarketplaceRepository(
                     craftsmanLng = lng.coerceIn(-180.0, 180.0)
                 )
             )
-            Result.success(Unit)
+            if (res.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                val rawErr = runCatching { res.errorBody()?.string() }.getOrNull().orEmpty()
+                Log.w(TAG, "updateCraftsmanLiveLocationOnRequest failed (${res.code()}): $rawErr")
+                Result.failure(SupabaseRequestUploadException(res.code(), rawErr, formatHttpError("تعذر تحديث الموقع", res.code(), rawErr)))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Log.w(TAG, "updateCraftsmanLiveLocationOnRequest exception", e)
             Result.failure(e)
         }
     }

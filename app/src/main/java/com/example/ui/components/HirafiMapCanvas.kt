@@ -223,8 +223,8 @@ fun HirafiRealMap(
         }
     }
 
-    // Fit bounding area when live route starts or request changes status
-    LaunchedEffect(activeRequest?.id, activeRequest?.status) {
+    // Fit bounding area when live route starts, changes status, or receives first craftsman coordinate
+    LaunchedEffect(activeRequest?.id, activeRequest?.status, liveRoute.craftsmanLat != null) {
         if (hasAssigned && activeRequest != null && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
             val lats = buildList {
                 add(activeRequest.lat)
@@ -358,53 +358,59 @@ fun HirafiRealMap(
                 }
 
                 if (hasAssigned && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
-                    ViewAnnotation(
-                        options = viewAnnotationOptions {
-                            geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
-                            annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
-                            allowOverlap(true)
-                            visible(true)
+                    key("craftsman_self_${activeRequest?.id}_${liveRoute.craftsmanLat}_${liveRoute.craftsmanLng}") {
+                        ViewAnnotation(
+                            options = viewAnnotationOptions {
+                                geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
+                                annotationAnchor { anchor(ViewAnnotationAnchor.TOP) }
+                                allowOverlap(true)
+                                visible(true)
+                            }
+                        ) {
+                            MapBadgePill(
+                                primaryText = "موقعك",
+                                secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "وصلت",
+                                highlighted = true,
+                                onClick = null
+                            )
                         }
-                    ) {
-                        MapBadgePill(
-                            primaryText = "موقعك",
-                            secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "وصلت",
-                            highlighted = true,
-                            onClick = null
-                        )
                     }
                 }
             } else {
                 if (activeRequest != null) {
-                    ViewAnnotation(
-                        options = viewAnnotationOptions {
-                            geometry(Point.fromLngLat(activeRequest.lng, activeRequest.lat))
-                            annotationAnchor { anchor(ViewAnnotationAnchor.BOTTOM) }
-                            allowOverlap(true)
-                            visible(true)
+                    key("client_req_${activeRequest.id}_${activeRequest.lat}_${activeRequest.lng}_${isSearching}") {
+                        ViewAnnotation(
+                            options = viewAnnotationOptions {
+                                geometry(Point.fromLngLat(activeRequest.lng, activeRequest.lat))
+                                annotationAnchor { anchor(ViewAnnotationAnchor.BOTTOM) }
+                                allowOverlap(true)
+                                visible(true)
+                            }
+                        ) {
+                            ClientPinBadge(
+                                label = if (isSearching) "جاري البحث" else "موقعك"
+                            )
                         }
-                    ) {
-                        ClientPinBadge(
-                            label = if (isSearching) "جاري البحث" else "موقعك"
-                        )
                     }
                 }
 
                 if (hasAssigned && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
-                    ViewAnnotation(
-                        options = viewAnnotationOptions {
-                            geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
-                            annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
-                            allowOverlap(true)
-                            visible(true)
+                    key("assigned_craftsman_${activeRequest?.id}_${liveRoute.craftsmanLat}_${liveRoute.craftsmanLng}") {
+                        ViewAnnotation(
+                            options = viewAnnotationOptions {
+                                geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
+                                annotationAnchor { anchor(ViewAnnotationAnchor.TOP) }
+                                allowOverlap(true)
+                                visible(true)
+                            }
+                        ) {
+                            MapBadgePill(
+                                primaryText = activeRequest?.assignedCraftsmanName?.split(" ")?.firstOrNull() ?: "الحرفي",
+                                secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "مباشر",
+                                highlighted = true,
+                                onClick = null
+                            )
                         }
-                    ) {
-                        MapBadgePill(
-                            primaryText = activeRequest?.assignedCraftsmanName?.split(" ")?.firstOrNull() ?: "الحرفي",
-                            secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "وصل",
-                            highlighted = true,
-                            onClick = null
-                        )
                     }
                 } else if (!hasAssigned) {
                     craftsmen.forEach { pin ->

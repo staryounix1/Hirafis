@@ -79,14 +79,35 @@ data class AcceptanceRadarMetrics(
 }
 
 object JobHandshakeSecurity {
+    fun normalizePinInput(raw: String): String {
+        val builder = StringBuilder(4)
+        for (ch in raw) {
+            val digit = Character.digit(ch, 10)
+            if (digit in 0..9) {
+                builder.append(('0'.code + digit).toChar())
+                if (builder.length == 4) break
+            }
+        }
+        return builder.toString()
+    }
+
     fun deriveSecurityPin(request: ServiceRequest): String {
-        val rawHash = "${request.id}|${request.clientId}|${request.categoryId}".hashCode()
-        val fourDigits = (abs(rawHash) % 9000) + 1000
+        val normalizedId = request.id.trim().lowercase(Locale.US)
+        val normalizedCat = request.categoryId.trim().lowercase(Locale.US)
+        val rawHash = "$normalizedId|$normalizedCat".hashCode()
+        val positiveHash = rawHash.toLong() and 0x7FFFFFFFL
+        val fourDigits = (positiveHash % 9000L) + 1000L
         return fourDigits.toString()
     }
 
+    fun verifySecurityPin(rawInput: String, request: ServiceRequest): Boolean {
+        val normalized = normalizePinInput(rawInput)
+        return normalized.length == 4 && normalized == deriveSecurityPin(request)
+    }
+
     fun deriveWarrantyCode(request: ServiceRequest): String {
-        val codeNum = (abs(request.id.hashCode()) % 90000) + 10000
+        val positiveHash = request.id.trim().lowercase(Locale.US).hashCode().toLong() and 0x7FFFFFFFL
+        val codeNum = (positiveHash % 90000L) + 10000L
         return "HRF-$codeNum-30D"
     }
 

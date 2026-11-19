@@ -1429,10 +1429,11 @@ class HirafiRepository(
         val api = SupabaseClientProvider.getApiServiceOrNull() ?: return null
         val bearer = supabaseSessionManager?.getValidBearerToken() ?: return null
         return runCatching {
-            val response = api.getProfileLocation(
+            val response = api.getCraftsmanDiscoveryPins(
                 apiKey = SupabaseConfig.anonKey,
                 bearer = bearer,
-                idFilter = "eq.$craftsmanId"
+                idFilter = "eq.$craftsmanId",
+                onlineFilter = null
             )
             if (response.isSuccessful) {
                 response.body()?.firstOrNull()?.let { dto ->

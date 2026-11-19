@@ -15,9 +15,11 @@ import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.local.UserPreferencesDataStore
+import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseClientProvider
 import com.example.data.remote.SupabaseConfig
 import com.example.data.remote.SupabaseProfileLocationPatchDto
+import com.example.data.remote.SupabaseRequestPatchDto
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +40,9 @@ class CraftsmanLocationService : Service() {
     private lateinit var prefs: UserPreferencesDataStore
     private var collectionJob: Job? = null
     private var lastSupabasePushMs: Long = 0L
+    @Volatile private var activeRequestId: String? = null
+    @Volatile private var activeRequestLat: Double? = null
+    @Volatile private var activeRequestLng: Double? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -56,6 +61,14 @@ class CraftsmanLocationService : Service() {
                 if (!locationService.hasLocationPermission()) {
                     stopTrackingAndService()
                     return START_NOT_STICKY
+                }
+                val reqId = intent?.getStringExtra(EXTRA_REQUEST_ID)
+                if (!reqId.isNullOrBlank()) {
+                    activeRequestId = reqId
+                }
+                if (intent?.hasExtra(EXTRA_REQUEST_LAT) == true && intent.hasExtra(EXTRA_REQUEST_LNG)) {
+                    activeRequestLat = intent.getDoubleExtra(EXTRA_REQUEST_LAT, 0.0)
+                    activeRequestLng = intent.getDoubleExtra(EXTRA_REQUEST_LNG, 0.0)
                 }
                 val title = intent?.getStringExtra(EXTRA_REQUEST_TITLE).orEmpty()
                 val notification = buildNotification(title)
@@ -92,6 +105,14 @@ class CraftsmanLocationService : Service() {
     }
 
     private suspend fun maybePushTelemetryToSupabase(snapshot: RealTimeLocationSnapshot) {
+        if (snapshot.lat == 0.0 && snapshot.lng == 0.0) return
+        val targetLat = activeRequestLat
+        val targetLng = activeRequestLng
+        if (targetLat != null && targetLng != null &&
+            MapRoutingService.haversineKm(snapshot.lat, snapshot.lng, targetLat, targetLng) > 150.0
+        ) {
+            return
+        }
         val now = System.currentTimeMillis()
         if (now - lastSupabasePushMs < 5500L) return
         if (!SupabaseConfig.isConfigured) return
@@ -101,16 +122,31 @@ class CraftsmanLocationService : Service() {
         val api = SupabaseClientProvider.getApiServiceOrNull() ?: return
 
         lastSupabasePushMs = now
+        val bearer = "Bearer $token"
         runCatching {
             api.patchProfileLocation(
                 apiKey = SupabaseConfig.anonKey,
-                bearer = "Bearer $token",
+                bearer = bearer,
                 idFilter = "eq.${session.userId}",
                 patch = SupabaseProfileLocationPatchDto(
                     lat = snapshot.lat,
                     lng = snapshot.lng
                 )
             )
+        }
+        val reqId = activeRequestId
+        if (!reqId.isNullOrBlank()) {
+            runCatching {
+                api.patchServiceRequest(
+                    apiKey = SupabaseConfig.anonKey,
+                    bearer = bearer,
+                    idFilter = "eq.$reqId",
+                    patch = SupabaseRequestPatchDto(
+                        craftsmanLat = snapshot.lat,
+                        craftsmanLng = snapshot.lng
+                    )
+                )
+            }
         }
     }
 
@@ -180,6 +216,8 @@ class CraftsmanLocationService : Service() {
         const val ACTION_STOP_TRACKING = "com.example.action.STOP_LOCATION_TRACKING"
         const val EXTRA_REQUEST_ID = "extra_request_id"
         const val EXTRA_REQUEST_TITLE = "extra_request_title"
+        const val EXTRA_REQUEST_LAT = "extra_request_lat"
+        const val EXTRA_REQUEST_LNG = "extra_request_lng"
         private const val CHANNEL_ID = "hirafi_live_location"
         private const val NOTIFICATION_ID = 4102
     }

@@ -66,7 +66,8 @@ interface SupabaseApiService {
     suspend fun getCraftsmanDiscoveryPins(
         @Header("apikey") apiKey: String,
         @Header("Authorization") bearer: String,
-        @Query("is_online") onlineFilter: String = "eq.true",
+        @Query("id") idFilter: String? = null,
+        @Query("is_online") onlineFilter: String? = "eq.true",
         @Query("order") order: String = "rating.desc"
     ): Response<List<SupabaseProfileDto>>
 

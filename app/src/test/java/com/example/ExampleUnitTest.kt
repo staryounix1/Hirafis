@@ -270,6 +270,16 @@ class ExampleUnitTest {
     assertEquals(4, pin.length)
     assertTrue(pin.all { it.isDigit() })
     assertEquals(pin, JobHandshakeSecurity.deriveSecurityPin(req))
+    assertEquals(pin, JobHandshakeSecurity.deriveSecurityPin(req.copy(clientId = "")))
+
+    val arabicDigits = mapOf(
+      '0' to '٠', '1' to '١', '2' to '٢', '3' to '٣', '4' to '٤',
+      '5' to '٥', '6' to '٦', '7' to '٧', '8' to '٨', '9' to '٩'
+    )
+    val arabicPin = pin.map { arabicDigits[it] ?: it }.joinToString("")
+    assertEquals(pin, JobHandshakeSecurity.normalizePinInput(arabicPin))
+    assertTrue(JobHandshakeSecurity.verifySecurityPin(arabicPin, req))
+    assertFalse(JobHandshakeSecurity.verifySecurityPin("000", req))
 
     val warranty = JobHandshakeSecurity.deriveWarrantyCode(req)
     assertTrue(warranty.startsWith("HRF-") && warranty.endsWith("-30D"))

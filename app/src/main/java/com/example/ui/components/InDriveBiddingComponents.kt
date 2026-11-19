@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Remove
@@ -642,15 +643,21 @@ fun ActiveJobSheet(
                         }
                     }
 
-                    if ((request.status == RequestStatus.ACCEPTED || request.status == RequestStatus.EN_ROUTE) &&
-                        liveRoute.etaMinutes > 0
-                    ) {
+                    if (request.status == RequestStatus.ACCEPTED || request.status == RequestStatus.EN_ROUTE) {
+                        val badgeLabel = when {
+                            liveRoute.craftsmanLat != null && liveRoute.etaMinutes > 0 ->
+                                "${liveRoute.etaMinutes} د • ${liveRoute.remainingDistanceKm} كم"
+                            liveRoute.craftsmanLat != null ->
+                                "بث مباشر ✓"
+                            else ->
+                                "جاري تحديد الموقع..."
+                        }
                         Surface(
                             color = ObsidianBlack,
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
-                                text = "${liveRoute.etaMinutes} د • ${liveRoute.remainingDistanceKm} كم",
+                                text = badgeLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = ElectricLime,
@@ -769,10 +776,93 @@ fun ActiveJobSheet(
 
                     if (request.status == RequestStatus.ACCEPTED ||
                         request.status == RequestStatus.EN_ROUTE ||
+                        request.status == RequestStatus.ARRIVED
+                    ) {
+                        Spacer(Modifier.height(10.dp))
+                        val hasCoords = liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null
+                        val coordsSummary = if (hasCoords) {
+                            String.format(
+                                java.util.Locale.US,
+                                "%.4f, %.4f",
+                                liveRoute.craftsmanLat,
+                                liveRoute.craftsmanLng
+                            )
+                        } else {
+                            ""
+                        }
+                        val liveInfoText = when {
+                            request.status == RequestStatus.ARRIVED ->
+                                "وصل الحرفي إلى موقعك"
+                            hasCoords && liveRoute.remainingDistanceKm > 0.0 ->
+                                "يبعد ${liveRoute.remainingDistanceKm} كم • يصل خلال ~${liveRoute.etaMinutes.coerceAtLeast(1)} د"
+                            hasCoords ->
+                                "موقع الحرفي متصل مباشرة على الخريطة"
+                            else ->
+                                "بانتظار إشارة GPS الحية من الحرفي..."
+                        }
+                        Surface(
+                            color = VerifiedEmeraldSoft,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, VerifiedEmerald.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                                .testTag("client_live_craftsman_location_banner")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.GpsFixed,
+                                        contentDescription = null,
+                                        tint = VerifiedEmerald,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "تتبع الحرفي في البث المباشر",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = ObsidianBlack
+                                        )
+                                        Text(
+                                            text = liveInfoText,
+                                            fontSize = 11.sp,
+                                            color = VerifiedEmerald,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                                if (coordsSummary.isNotEmpty()) {
+                                    Surface(
+                                        color = ObsidianBlack,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = coordsSummary,
+                                            color = ElectricLime,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (request.status == RequestStatus.ACCEPTED ||
+                        request.status == RequestStatus.EN_ROUTE ||
                         request.status == RequestStatus.ARRIVED ||
                         request.status == RequestStatus.IN_PROGRESS
                     ) {
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(10.dp))
                         JobHandshakePinBanner(request = request)
                     }
 

@@ -68,6 +68,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1143,8 +1144,8 @@ private fun DriverActiveJobCard(
         RequestStatus.IN_PROGRESS -> "إنهاء وتحصيل ${request.acceptedPrice ?: request.proposedPrice} د.م" to RequestStatus.COMPLETED
         else -> null
     }
-    var isPinVerified by remember(request.id) { mutableStateOf(false) }
-    val expectedPin = remember(request.id, request.clientId, request.categoryId) {
+    var isPinVerified by rememberSaveable(request.id) { mutableStateOf(false) }
+    val expectedPin = remember(request.id, request.categoryId) {
         JobHandshakeSecurity.deriveSecurityPin(request)
     }
 

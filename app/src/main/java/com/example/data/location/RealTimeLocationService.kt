@@ -240,13 +240,22 @@ class RealTimeLocationService(context: Context) {
         }
     }
 
-    fun startForegroundJobTracking(requestId: String, requestTitle: String) {
+    fun startForegroundJobTracking(
+        requestId: String,
+        requestTitle: String,
+        requestLat: Double? = null,
+        requestLng: Double? = null
+    ) {
         if (!hasLocationPermission()) return
         runCatching {
             val intent = Intent(appContext, CraftsmanLocationService::class.java).apply {
                 action = CraftsmanLocationService.ACTION_START_TRACKING
                 putExtra(CraftsmanLocationService.EXTRA_REQUEST_ID, requestId)
                 putExtra(CraftsmanLocationService.EXTRA_REQUEST_TITLE, requestTitle)
+                if (requestLat != null && requestLng != null) {
+                    putExtra(CraftsmanLocationService.EXTRA_REQUEST_LAT, requestLat)
+                    putExtra(CraftsmanLocationService.EXTRA_REQUEST_LNG, requestLng)
+                }
             }
             ContextCompat.startForegroundService(appContext, intent)
         }

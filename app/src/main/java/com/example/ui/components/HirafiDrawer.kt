@@ -330,7 +330,7 @@ fun HirafiDrawerContent(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "متصل بقاعدة بيانات Supabase ✓",
+                                text = "متصل",
                                 color = VerifiedEmerald,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp

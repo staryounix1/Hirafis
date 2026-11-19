@@ -415,7 +415,7 @@ fun JobHandshakePinBanner(
     request: ServiceRequest,
     modifier: Modifier = Modifier
 ) {
-    val pin = remember(request.id, request.clientId, request.categoryId) {
+    val pin = remember(request.id, request.categoryId) {
         JobHandshakeSecurity.deriveSecurityPin(request)
     }
     val warrantyCode = remember(request.id) {
@@ -528,8 +528,8 @@ fun CraftsmanHandshakePinVerifier(
     onVerified: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var enteredPin by remember { mutableStateOf("") }
-    var showMismatchError by remember { mutableStateOf(false) }
+    var enteredPin by remember(expectedPin) { mutableStateOf("") }
+    var showMismatchError by remember(expectedPin) { mutableStateOf(false) }
 
     if (isVerified) {
         Surface(
@@ -546,7 +546,7 @@ fun CraftsmanHandshakePinVerifier(
             ) {
                 Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(18.dp))
                 Text(
-                    text = "تم تأكيد رمز الأمان ($expectedPin) — يمكنك البدء الآن",
+                    text = "تم تأكيد رمز الأمان — يمكنك البدء الآن",
                     color = VerifiedEmerald,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp
@@ -568,38 +568,12 @@ fun CraftsmanHandshakePinVerifier(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "أدخل رمز التحقق من الزبون",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
-                )
-                Surface(
-                    color = ElectricLime.copy(alpha = 0.16f),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            enteredPin = expectedPin
-                            showMismatchError = false
-                            onVerified()
-                        }
-                        .testTag("quick_verify_pin_button")
-                ) {
-                    Text(
-                        text = "تحقق سريع ($expectedPin)",
-                        color = ElectricLime,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
+            Text(
+                text = "أدخل رمز التحقق المكوّن من 4 أرقام من الزبون",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -609,7 +583,7 @@ fun CraftsmanHandshakePinVerifier(
                 OutlinedTextField(
                     value = enteredPin,
                     onValueChange = { raw ->
-                        val digits = raw.filter { it.isDigit() }.take(4)
+                        val digits = JobHandshakeSecurity.normalizePinInput(raw)
                         enteredPin = digits
                         showMismatchError = false
                         if (digits == expectedPin) {
@@ -635,7 +609,9 @@ fun CraftsmanHandshakePinVerifier(
 
                 Button(
                     onClick = {
-                        if (enteredPin == expectedPin) {
+                        val normalized = JobHandshakeSecurity.normalizePinInput(enteredPin)
+                        enteredPin = normalized
+                        if (normalized.length == 4 && normalized == expectedPin) {
                             showMismatchError = false
                             onVerified()
                         } else {
