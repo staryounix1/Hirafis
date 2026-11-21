@@ -2,6 +2,9 @@ package com.example.ui.auth
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
@@ -9,9 +12,12 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.data.remote.SupabaseConfig
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -26,53 +32,144 @@ data class GoogleAuthAccount(
 object GoogleAuthHelper {
     private const val TAG = "GoogleAuthHelper"
 
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+
     fun launchGoogleSignIn(
         context: Context,
         credentialManager: CredentialManager,
         scope: CoroutineScope,
         onAuthSuccess: (GoogleAuthAccount) -> Unit,
         onAuthError: (String) -> Unit,
-        onAuthCancelled: () -> Unit
+        onAuthCancelled: () -> Unit,
+        onLaunchedBrowserOAuth: () -> Unit = {}
     ) {
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
-            onAuthError("تعذر العثور على إعدادات تسجيل الدخول بواسطة غوغل")
-            return
-        }
-        val activity = context as? Activity
+        val activity = context.findActivity()
         if (activity == null) {
-            onAuthError("تعذر فتح نافذة اختيار حساب غوغل")
+            if (SupabaseConfig.isConfigured && launchBrowserGoogleOAuth(context)) {
+                onLaunchedBrowserOAuth()
+            } else {
+                onAuthError("تعذر فتح نافذة اختيار حساب غوغل")
+            }
             return
         }
 
-        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInOption)
-            .build()
+        val clientId = runCatching {
+            context.getString(R.string.default_web_client_id).trim()
+        }.getOrNull().orEmpty()
+
+        if (clientId.isBlank()) {
+            if (SupabaseConfig.isConfigured && launchBrowserGoogleOAuth(activity)) {
+                onLaunchedBrowserOAuth()
+            } else {
+                onAuthError("تعذر العثور على إعدادات تسجيل الدخول بواسطة غوغل")
+            }
+            return
+        }
 
         scope.launch {
-            try {
-                val cred = credentialManager.getCredential(activity, request).credential
-                if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    val tokenCred = GoogleIdTokenCredential.createFrom(cred.data)
-                    onAuthSuccess(
-                        GoogleAuthAccount(
-                            idToken = tokenCred.idToken,
-                            displayName = tokenCred.displayName.orEmpty(),
-                            email = tokenCred.id
-                        )
-                    )
-                } else {
-                    onAuthError("نوع بيانات الاعتماد غير مدعوم")
+            // 1. Primary native flow: GetSignInWithGoogleOption (explicit Google Sign-In sheet)
+            val buttonOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+            val primaryRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(buttonOption)
+                .build()
+
+            when (val primary = tryCredentialRequest(activity, credentialManager, primaryRequest)) {
+                is CredentialAttempt.Success -> {
+                    onAuthSuccess(primary.account)
+                    return@launch
                 }
-            } catch (e: GetCredentialCancellationException) {
-                Log.w(TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
-                onAuthCancelled()
-            } catch (e: Exception) {
-                Log.e(TAG, "Google Sign-In failed", e)
-                onAuthError(e.localizedMessage ?: "فشل تسجيل الدخول بواسطة غوغل")
+                CredentialAttempt.Cancelled -> {
+                    onAuthCancelled()
+                    return@launch
+                }
+                is CredentialAttempt.Failed -> {
+                    Log.w(TAG, "GetSignInWithGoogleOption unavailable (${primary.message}); trying GetGoogleIdOption")
+                }
             }
+
+            // 2. Secondary native flow: GetGoogleIdOption without authorized-accounts filter
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(false)
+                .setServerClientId(clientId)
+                .setAutoSelectEnabled(false)
+                .build()
+            val secondaryRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+
+            when (val secondary = tryCredentialRequest(activity, credentialManager, secondaryRequest)) {
+                is CredentialAttempt.Success -> {
+                    onAuthSuccess(secondary.account)
+                    return@launch
+                }
+                CredentialAttempt.Cancelled -> {
+                    onAuthCancelled()
+                    return@launch
+                }
+                is CredentialAttempt.Failed -> {
+                    Log.w(TAG, "GetGoogleIdOption unavailable (${secondary.message}); falling back to Supabase Google OAuth browser flow")
+                    if (SupabaseConfig.isConfigured && launchBrowserGoogleOAuth(activity)) {
+                        onLaunchedBrowserOAuth()
+                    } else {
+                        onAuthError(secondary.message.ifBlank { "تسجيل الدخول عبر غوغل غير متاح على هذا الجهاز حالياً" })
+                    }
+                }
+            }
+        }
+    }
+
+    fun launchBrowserGoogleOAuth(context: Context): Boolean {
+        if (!SupabaseConfig.isConfigured) return false
+        return runCatching {
+            val authUri = Uri.parse(SupabaseConfig.googleAuthorizeUrl())
+            val intent = Intent(Intent.ACTION_VIEW, authUri).apply {
+                if (context.findActivity() == null) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            context.startActivity(intent)
+            true
+        }.onFailure { err ->
+            Log.e(TAG, "Failed to open browser Google OAuth", err)
+        }.getOrDefault(false)
+    }
+
+    private sealed interface CredentialAttempt {
+        data class Success(val account: GoogleAuthAccount) : CredentialAttempt
+        data object Cancelled : CredentialAttempt
+        data class Failed(val message: String) : CredentialAttempt
+    }
+
+    private suspend fun tryCredentialRequest(
+        activity: Activity,
+        credentialManager: CredentialManager,
+        request: GetCredentialRequest
+    ): CredentialAttempt {
+        return try {
+            val cred = credentialManager.getCredential(activity, request).credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val tokenCred = GoogleIdTokenCredential.createFrom(cred.data)
+                CredentialAttempt.Success(
+                    GoogleAuthAccount(
+                        idToken = tokenCred.idToken,
+                        displayName = tokenCred.displayName.orEmpty(),
+                        email = tokenCred.id
+                    )
+                )
+            } else {
+                CredentialAttempt.Failed("نوع بيانات الاعتماد غير مدعوم")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: GetCredentialCancellationException) {
+            Log.w(TAG, "Google Sign-In cancelled or dismissed: ${e.message}")
+            CredentialAttempt.Cancelled
+        } catch (e: Exception) {
+            CredentialAttempt.Failed(e.localizedMessage ?: "فشل تسجيل الدخول بواسطة غوغل")
         }
     }
 

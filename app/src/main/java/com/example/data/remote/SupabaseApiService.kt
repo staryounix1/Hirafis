@@ -50,6 +50,12 @@ interface SupabaseApiService {
         @Header("Authorization") bearer: String
     ): Response<Unit>
 
+    @POST("auth/v1/recover")
+    suspend fun recoverPassword(
+        @Header("apikey") apiKey: String,
+        @Body body: SupabaseRecoverRequest
+    ): Response<Unit>
+
     // ---- Profiles ----
 
     @GET("rest/v1/profiles?select=*")

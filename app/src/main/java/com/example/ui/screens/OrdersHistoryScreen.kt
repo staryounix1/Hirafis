@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +53,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -67,18 +72,46 @@ import com.example.data.model.JobHandshakeSecurity
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
+import com.example.ui.components.ObsidianHeroBrush
 import com.example.ui.components.WarrantyCertificateDialog
-import com.example.ui.theme.ElectricLime
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.HirafiStrings
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.VoltGlowAccent
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
 import com.example.ui.viewmodel.HirafiViewModel
 
-private enum class OrderFilterTab(val labelAr: String) {
-    ALL("الكل"),
-    ACTIVE("جارية"),
-    COMPLETED("مكتملة"),
-    CANCELLED("ملغاة")
+private enum class OrderFilterTab {
+    ALL,
+    ACTIVE,
+    COMPLETED,
+    CANCELLED;
+
+    fun localizedLabel(s: HirafiStrings): String = when (this) {
+        ALL -> s.all
+        ACTIVE -> when (s.language) {
+            AppLanguage.ARABIC -> "جارية"
+            AppLanguage.FRENCH -> "En cours"
+            AppLanguage.ENGLISH -> "Active"
+        }
+        COMPLETED -> when (s.language) {
+            AppLanguage.ARABIC -> "مكتملة"
+            AppLanguage.FRENCH -> "Terminées"
+            AppLanguage.ENGLISH -> "Completed"
+        }
+        CANCELLED -> when (s.language) {
+            AppLanguage.ARABIC -> "ملغاة"
+            AppLanguage.FRENCH -> "Annulées"
+            AppLanguage.ENGLISH -> "Cancelled"
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,6 +122,7 @@ fun OrdersHistoryScreen(
     onOpenChat: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val s = hirafiStrings()
     val allRequests by viewModel.allRequests.collectAsStateWithLifecycle()
     val session by viewModel.userSession.collectAsStateWithLifecycle()
     var selectedFilter by remember { mutableStateOf(OrderFilterTab.ALL) }
@@ -115,15 +149,53 @@ fun OrdersHistoryScreen(
     val completedList = roleRequests.filter { it.status == RequestStatus.COMPLETED }
     val totalAmountDh = completedList.sumOf { it.acceptedPrice ?: it.proposedPrice }
 
+    val totalEarningsLabel = when {
+        session.role == UserRole.CRAFTSMAN -> when (s.language) {
+            AppLanguage.ARABIC -> "مجموع الأرباح"
+            AppLanguage.FRENCH -> "Revenus totaux"
+            AppLanguage.ENGLISH -> "Total earnings"
+        }
+        else -> when (s.language) {
+            AppLanguage.ARABIC -> "إجمالي الخدمات"
+            AppLanguage.FRENCH -> "Total services"
+            AppLanguage.ENGLISH -> "Total spent"
+        }
+    }
+    val completedJobsLabel = when (s.language) {
+        AppLanguage.ARABIC -> "خدمات منجزة"
+        AppLanguage.FRENCH -> "Interventions"
+        AppLanguage.ENGLISH -> "Completed"
+    }
+    val warrantiesLabel = when (s.language) {
+        AppLanguage.ARABIC -> "شهادات ضمان"
+        AppLanguage.FRENCH -> "Garanties"
+        AppLanguage.ENGLISH -> "Warranties"
+    }
+    val warrantyBtnLabel = when (s.language) {
+        AppLanguage.ARABIC -> "شهادة الضمان"
+        AppLanguage.FRENCH -> "Garantie"
+        AppLanguage.ENGLISH -> "Warranty"
+    }
+    val pricePrefix = when (s.language) {
+        AppLanguage.ARABIC -> "السعر:"
+        AppLanguage.FRENCH -> "Tarif :"
+        AppLanguage.ENGLISH -> "Price:"
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("سجل الطلبات والضمانات", fontWeight = FontWeight.Bold)
+                        Text(s.ordersTitle, fontWeight = FontWeight.ExtraBold)
                         if (session.role == UserRole.CRAFTSMAN) {
+                            val specName = HirafiCategories.byId(session.craftsmanSpecialtyId).localizedName(s)
                             Text(
-                                text = "مهنتك: ${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr} فقط",
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> "مهنتك: $specName فقط"
+                                    AppLanguage.FRENCH -> "Spécialité : $specName"
+                                    AppLanguage.ENGLISH -> "Trade: $specName"
+                                },
                                 fontSize = 11.sp,
                                 color = VerifiedEmerald
                             )
@@ -131,8 +203,8 @@ fun OrdersHistoryScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "رجوع")
+                    IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -153,7 +225,7 @@ fun OrdersHistoryScreen(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.img_hirafi_hero),
-                        contentDescription = "شعار خدمات حرفي",
+                        contentDescription = s.appTitle,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -162,36 +234,112 @@ fun OrdersHistoryScreen(
                 }
             }
 
-            // Obsidian Smart Ledger Summary
+            val activeCount = roleRequests.count {
+                it.status != RequestStatus.COMPLETED && it.status != RequestStatus.CANCELLED
+            }
+            val cancelledCount = roleRequests.count { it.status == RequestStatus.CANCELLED }
+
+            // Obsidian Smart Ledger Summary + Visual Breakdown Bar
             item {
                 Card(
                     shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = ObsidianBlack),
+                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(ObsidianHeroBrush)
+                        .border(1.dp, WepeEmerald.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
                         .testTag("orders_analytics_ledger")
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        LedgerStatTile(
-                            label = if (session.role == UserRole.CRAFTSMAN) "مجموع الأرباح" else "إجمالي الخدمات",
-                            value = "$totalAmountDh د.م",
-                            modifier = Modifier.weight(1.2f)
-                        )
-                        LedgerStatTile(
-                            label = "خدمات منجزة",
-                            value = "${completedList.size}",
-                            modifier = Modifier.weight(0.9f)
-                        )
-                        LedgerStatTile(
-                            label = "شهادات ضمان",
-                            value = "${completedList.size}",
-                            modifier = Modifier.weight(0.9f)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LedgerStatTile(
+                                label = totalEarningsLabel,
+                                value = "$totalAmountDh ${s.currencyDh}",
+                                modifier = Modifier.weight(1.2f)
+                            )
+                            LedgerStatTile(
+                                label = completedJobsLabel,
+                                value = "${completedList.size}",
+                                modifier = Modifier.weight(0.9f)
+                            )
+                            LedgerStatTile(
+                                label = warrantiesLabel,
+                                value = "${completedList.size}",
+                                modifier = Modifier.weight(0.9f)
+                            )
+                        }
+
+                        if (roleRequests.isNotEmpty()) {
+                            val totalCount = roleRequests.size.toFloat().coerceAtLeast(1f)
+                            val completedRatio = completedList.size / totalCount
+                            val activeRatio = activeCount / totalCount
+                            val cancelledRatio = cancelledCount / totalCount
+
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Canvas(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                ) {
+                                    drawRect(color = Color(0xFF282D35), size = size)
+                                    var xOffset = 0f
+                                    if (completedRatio > 0f) {
+                                        val w = size.width * completedRatio
+                                        drawRoundRect(
+                                            color = WepeEmerald,
+                                            topLeft = Offset(xOffset, 0f),
+                                            size = Size(w, size.height),
+                                            cornerRadius = CornerRadius(4f, 4f)
+                                        )
+                                        xOffset += w
+                                    }
+                                    if (activeRatio > 0f) {
+                                        val w = size.width * activeRatio
+                                        drawRoundRect(
+                                            color = VoltGlowAccent,
+                                            topLeft = Offset(xOffset, 0f),
+                                            size = Size(w, size.height),
+                                            cornerRadius = CornerRadius(4f, 4f)
+                                        )
+                                        xOffset += w
+                                    }
+                                    if (cancelledRatio > 0f) {
+                                        val w = (size.width - xOffset).coerceAtLeast(0f)
+                                        drawRoundRect(
+                                            color = UrgentCoral,
+                                            topLeft = Offset(xOffset, 0f),
+                                            size = Size(w, size.height),
+                                            cornerRadius = CornerRadius(4f, 4f)
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    LedgerLegendItem(
+                                        color = WepeEmerald,
+                                        text = "${OrderFilterTab.COMPLETED.localizedLabel(s)} (${completedList.size})"
+                                    )
+                                    LedgerLegendItem(
+                                        color = VoltGlowAccent,
+                                        text = "${OrderFilterTab.ACTIVE.localizedLabel(s)} ($activeCount)"
+                                    )
+                                    LedgerLegendItem(
+                                        color = UrgentCoral,
+                                        text = "${OrderFilterTab.CANCELLED.localizedLabel(s)} ($cancelledCount)"
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -202,10 +350,10 @@ fun OrdersHistoryScreen(
                         FilterChip(
                             selected = selectedFilter == tab,
                             onClick = { selectedFilter = tab },
-                            label = { Text(tab.labelAr, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                            label = { Text(tab.localizedLabel(s), fontSize = 12.sp, fontWeight = FontWeight.Bold) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ObsidianBlack,
-                                selectedLabelColor = ElectricLime
+                                selectedContainerColor = WepeEmerald,
+                                selectedLabelColor = Color.White
                             ),
                             modifier = Modifier.testTag("order_filter_${tab.name.lowercase()}")
                         )
@@ -223,7 +371,7 @@ fun OrdersHistoryScreen(
                     ) {
                         Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(48.dp))
                         Spacer(Modifier.height(8.dp))
-                        Text("لا توجد طلبات في هذا التصنيف حالياً", fontWeight = FontWeight.Bold)
+                        Text(s.ordersEmptyTitle, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
@@ -266,20 +414,20 @@ fun OrdersHistoryScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        Text(req.categoryName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(category.localizedName(s), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
 
                                 Surface(
-                                    color = if (req.status == RequestStatus.SEARCHING) ElectricLime else statusColor.copy(alpha = 0.14f),
-                                    shape = RoundedCornerShape(10.dp)
+                                    color = if (req.status == RequestStatus.SEARCHING) WepeEmeraldSoft else statusColor.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(99.dp)
                                 ) {
                                     Text(
-                                        text = req.status.labelAr,
+                                        text = req.status.localizedLabel(s),
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (req.status == RequestStatus.SEARCHING) ObsidianBlack else statusColor,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        color = if (req.status == RequestStatus.SEARCHING) WepeEmeraldDark else statusColor,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                     )
                                 }
                             }
@@ -296,36 +444,55 @@ fun OrdersHistoryScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "السعر: ${req.acceptedPrice ?: req.proposedPrice} درهم",
+                                    text = "$pricePrefix ${req.acceptedPrice ?: req.proposedPrice} ${s.currencyDh}",
                                     fontWeight = FontWeight.Bold,
                                     color = VerifiedEmerald
                                 )
 
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (session.role == UserRole.CLIENT &&
+                                        (req.status == RequestStatus.COMPLETED || req.status == RequestStatus.CANCELLED)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                viewModel.prefillDraftFromRequest(req)
+                                                onBack()
+                                            },
+                                            shape = RoundedCornerShape(99.dp),
+                                            modifier = Modifier
+                                                .height(48.dp)
+                                                .testTag("reorder_request_${req.id}")
+                                        ) {
+                                            Icon(Icons.Rounded.Replay, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(s.clientReorderLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+
                                     if (req.status == RequestStatus.COMPLETED) {
                                         OutlinedButton(
                                             onClick = { warrantyTarget = req },
-                                            shape = RoundedCornerShape(12.dp),
+                                            shape = RoundedCornerShape(99.dp),
                                             modifier = Modifier
                                                 .height(48.dp)
                                                 .testTag("open_warranty_${req.id}")
                                         ) {
                                             Icon(Icons.Rounded.Verified, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("شهادة الضمان", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text(warrantyBtnLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
 
                                     if (req.assignedCraftsmanName != null) {
                                         Button(
                                             onClick = { onOpenChat(req.id) },
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianBlack, contentColor = ElectricLime),
+                                            shape = RoundedCornerShape(99.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
                                             modifier = Modifier.height(48.dp)
                                         ) {
                                             Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("المحادثة", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                            Text(s.clientOpenChat, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
@@ -343,12 +510,30 @@ fun OrdersHistoryScreen(
             onShare = {
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, "شهادة ضمان خدمة حرفي")
+                    putExtra(Intent.EXTRA_SUBJECT, warrantyBtnLabel)
                     putExtra(Intent.EXTRA_TEXT, JobHandshakeSecurity.buildWarrantyShareText(target))
                 }
-                context.startActivity(Intent.createChooser(shareIntent, "مشاركة شهادة الضمان"))
+                context.startActivity(Intent.createChooser(shareIntent, warrantyBtnLabel))
             },
             onDismiss = { warrantyTarget = null }
+        )
+    }
+}
+
+@Composable
+private fun LedgerLegendItem(color: Color, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Text(
+            text = text,
+            color = Color(0xFFD0D5DD),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
@@ -375,7 +560,7 @@ private fun LedgerStatTile(
             Spacer(Modifier.height(2.dp))
             Text(
                 text = value,
-                color = ElectricLime,
+                color = VoltGlowAccent,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 14.sp,
                 maxLines = 1,

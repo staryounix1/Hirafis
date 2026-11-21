@@ -21,6 +21,8 @@ data class SupabaseAuthState(
     val expiresAtMillis: Long = 0L
 )
 
+class GoogleIdTokenFallbackToBrowserException(message: String) : IllegalStateException(message)
+
 class SupabaseSessionManager(
     private val prefs: UserPreferencesDataStore
 ) {
@@ -62,11 +64,70 @@ class SupabaseSessionManager(
                 apiKey = SupabaseConfig.anonKey,
                 body = SupabaseIdTokenAuthRequest(provider = "google", idToken = idToken)
             )
-            handleAuthResponse(response)
+            if (!response.isSuccessful) {
+                val msg = parseErrorMessage(response)
+                if (response.code() in listOf(400, 401, 403, 422)) {
+                    return Result.failure(GoogleIdTokenFallbackToBrowserException(msg))
+                }
+                return Result.failure(IllegalStateException(msg))
+            }
+            val body = response.body()
+                ?: return Result.failure(IllegalStateException("استجابة فارغة من خادم Supabase"))
+            persistAuthState(body)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Google ID token exchange failed", e)
+            Result.failure(wrapAuthException(e))
+        }
+    }
+
+    suspend fun completeOAuthCallback(uriString: String): Result<SupabaseAuthState> {
+        val params = parseOAuthCallbackParams(uriString)
+        val oauthError = params["error_description"] ?: params["error"]
+        if (!oauthError.isNullOrBlank()) {
+            val lowered = oauthError.lowercase()
+            val friendly = when {
+                lowered.contains("provider is not enabled") || lowered.contains("unsupported_provider") ->
+                    "تسجيل الدخول عبر غوغل غير مفعّل بعد في إعدادات Supabase Authentication"
+                lowered.contains("access_denied") ->
+                    "تم إلغاء تسجيل الدخول عبر غوغل"
+                else -> oauthError
+            }
+            return Result.failure(IllegalStateException(friendly))
+        }
+
+        val accessToken = params["access_token"]?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(IllegalStateException("لم يتم استلام رمز الجلسة من غوغل. تأكد من تفعيل مزود Google وإضافة hirafi://auth-callback في إعدادات Supabase."))
+        val refreshToken = params["refresh_token"]?.takeIf { it.isNotBlank() }
+        val expiresIn = params["expires_in"]?.toLongOrNull() ?: 3600L
+
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets أولاً"))
+
+        return try {
+            val userRes = api.getAuthUser(
+                apiKey = SupabaseConfig.anonKey,
+                bearer = "Bearer $accessToken"
+            )
+            if (!userRes.isSuccessful) {
+                return Result.failure(IllegalStateException(parseErrorMessage(userRes)))
+            }
+            val user = userRes.body()
+                ?: return Result.failure(IllegalStateException("تعذر قراءة بيانات حساب غوغل من Supabase"))
+            persistAuthState(
+                SupabaseAuthResponse(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken,
+                    expiresIn = expiresIn,
+                    tokenType = "bearer",
+                    user = user
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "OAuth callback completion failed", e)
             Result.failure(wrapAuthException(e))
         }
     }
@@ -117,6 +178,27 @@ class SupabaseSessionManager(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Email sign up failed", e)
+            Result.failure(wrapAuthException(e))
+        }
+    }
+
+    suspend fun sendPasswordResetEmail(email: String): Result<Unit> {
+        val api = SupabaseClientProvider.getApiServiceOrNull()
+            ?: return Result.failure(IllegalStateException("يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets أولاً"))
+        val cleanEmail = email.trim().lowercase()
+        return try {
+            val response = api.recoverPassword(
+                apiKey = SupabaseConfig.anonKey,
+                body = SupabaseRecoverRequest(email = cleanEmail)
+            )
+            if (!response.isSuccessful) {
+                return Result.failure(IllegalStateException(parseErrorMessage(response)))
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Password reset failed", e)
             Result.failure(wrapAuthException(e))
         }
     }
@@ -235,6 +317,7 @@ class SupabaseSessionManager(
             lowered.contains("email not confirmed") -> "يرجى تأكيد بريدك الإلكتروني أولاً قبل تسجيل الدخول"
             lowered.contains("rate limit") || lowered.contains("429") -> "تم تجاوز الحد المسموح من محاولات التسجيل أو إرسال البريد مؤقتاً (429). يرجى الانتظار قليلًا أو تسجيل الدخول مباشرة إذا كان حسابك مسجلاً."
             lowered.contains("provider is not enabled") -> "تسجيل الدخول عبر غوغل غير مفعّل بعد في إعدادات Supabase Authentication"
+            lowered.contains("unacceptable audience") || lowered.contains("nonce") -> "إعداد معرّف غوغل (Client ID) غير متطابق في Supabase، جارٍ الاعتماد على المتصفح."
             lowered.contains("password should be at least") -> "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل"
             parsed.isNotBlank() -> "$parsed (${response.code()})"
             else -> "تعذر إتمام المصادقة (${response.code()})"
@@ -252,5 +335,29 @@ class SupabaseSessionManager(
 
     companion object {
         private const val TAG = "SupabaseSession"
+
+        fun parseOAuthCallbackParams(rawUri: String): Map<String, String> {
+            val result = linkedMapOf<String, String>()
+            val queryPart = rawUri.substringAfter('?', "").substringBefore('#')
+            val fragmentPart = rawUri.substringAfter('#', "")
+            listOf(queryPart, fragmentPart).forEach { section ->
+                if (section.isBlank()) return@forEach
+                section.split('&').forEach { pair ->
+                    val idx = pair.indexOf('=')
+                    if (idx > 0) {
+                        val key = runCatching {
+                            java.net.URLDecoder.decode(pair.substring(0, idx), "UTF-8")
+                        }.getOrDefault(pair.substring(0, idx))
+                        val value = runCatching {
+                            java.net.URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                        }.getOrDefault(pair.substring(idx + 1))
+                        if (key.isNotBlank()) {
+                            result[key] = value
+                        }
+                    }
+                }
+            }
+            return result
+        }
     }
 }

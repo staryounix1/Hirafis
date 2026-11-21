@@ -15,6 +15,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,15 +46,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NearMe
+import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.PersonSearch
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -70,6 +76,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -107,18 +114,24 @@ import com.example.ui.components.CraftsmanDetailDialog
 import com.example.ui.components.HirafiRealMap
 import com.example.ui.components.IncomingOfferCard
 import com.example.ui.components.LiveDispatchSonarOverlay
+import com.example.ui.components.LivePulseDot
 import com.example.ui.components.NearbyCraftsmenSearchSheet
 import com.example.ui.components.PriceProposalBar
 import com.example.ui.components.RatingDialog
 import com.example.ui.components.RealtimeBiddingBottomSheet
 import com.example.ui.components.SheetDragHandleBar
 import com.example.ui.components.SmartTriageCarousel
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.UrgentCoral
-import com.example.ui.theme.VerifiedEmerald
-import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
+import com.example.ui.theme.WepeSoftCard
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 
@@ -131,6 +144,7 @@ fun ClientHomeScreen(
     onOpenSafety: () -> Unit
 ) {
     val context = LocalContext.current
+    val s = hirafiStrings()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val isSubmittingRequest by viewModel.isSubmittingRequest.collectAsStateWithLifecycle()
     val filteredCraftsmen by viewModel.filteredNearbyCraftsmen.collectAsStateWithLifecycle()
@@ -153,6 +167,14 @@ fun ClientHomeScreen(
     val previewedPortfolio by viewModel.previewedCraftsmanPortfolio.collectAsStateWithLifecycle()
     val runtimeConfig by viewModel.appRuntimeConfig.collectAsStateWithLifecycle()
     val currentSession by viewModel.userSession.collectAsStateWithLifecycle()
+    val allRequests by viewModel.allRequests.collectAsStateWithLifecycle()
+    val unreadChatCounts by viewModel.unreadChatCounts.collectAsStateWithLifecycle()
+    val lastPastOrder = remember(allRequests, currentSession.userId) {
+        allRequests.firstOrNull { req ->
+            req.clientId == currentSession.userId &&
+                (req.status == RequestStatus.COMPLETED || req.status == RequestStatus.CANCELLED)
+        }
+    }
 
     var showLocationPicker by remember { mutableStateOf(false) }
     var showCraftsmenSheet by remember { mutableStateOf(false) }
@@ -192,7 +214,7 @@ fun ClientHomeScreen(
     val selectedCategory = HirafiCategories.byId(draft.selectedCategoryId)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val maxSheetBodyHeight = (maxHeight * 0.64f).coerceAtLeast(280.dp)
+        val maxSheetBodyHeight = (maxHeight * 0.45f).coerceAtLeast(220.dp)
         // 1. Live inDrive-speed real Mapbox map
         HirafiRealMap(
             centerLat = activeRequest?.lat ?: draft.lat,
@@ -221,7 +243,7 @@ fun ClientHomeScreen(
             )
         }
 
-        // 2. Iconic inDrive Passenger Top Floating HUD
+        // 2. Crisp White & Emerald Top Floating HUD (Screens 1 & 2 look)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -230,12 +252,13 @@ fun ClientHomeScreen(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
+                    color = Color.White,
+                    border = BorderStroke(1.dp, WepeHairline),
                     shadowElevation = 8.dp
                 ) {
                     IconButton(
@@ -247,20 +270,21 @@ fun ClientHomeScreen(
                         Icon(
                             Icons.Rounded.Menu,
                             contentDescription = "القائمة",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            tint = ObsidianBlack
                         )
                     }
                 }
 
-                // Pickup Location Pill with glowing Emerald inDrive dot
+                // Floating Location / Route Summary Pill (Screen 2 style)
                 Surface(
-                    shape = RoundedCornerShape(26.dp),
-                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(99.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.dp, WepeHairline),
                     shadowElevation = 8.dp,
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
-                        .clip(RoundedCornerShape(26.dp))
+                        .clip(RoundedCornerShape(99.dp))
                         .clickable { showLocationPicker = true }
                         .testTag("location_pill")
                 ) {
@@ -268,44 +292,37 @@ fun ClientHomeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 14.dp)
                     ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(VerifiedEmeraldSoft)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(VerifiedEmerald)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
+                        LivePulseDot(color = WepeEmerald, dotSize = 8.dp)
+                        Spacer(Modifier.width(9.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "موقع الخدمة",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = when {
-                                    activeRequest != null -> activeRequest!!.addressLabel
-                                    draft.isResolvingAddress -> "جاري تحديد العنوان..."
-                                    else -> draft.addressLabel
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> "موقع الخدمة"
+                                    AppLanguage.FRENCH -> "Lieu d'intervention"
+                                    AppLanguage.ENGLISH -> "Service location"
                                 },
+                                fontSize = 10.sp,
+                                color = Color(0xFF667085)
+                            )
+                            val displayLocation = when {
+                                activeRequest != null -> "${activeRequest!!.addressLabel}  →  ${activeRequest!!.categoryName}"
+                                draft.isResolvingAddress -> s.loading
+                                else -> draft.addressLabel
+                            }
+                            Text(
+                                text = displayLocation,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = ObsidianBlack
                             )
                         }
                     }
                 }
             }
 
-            // GPS Locate Pill & Runtime Status Badges on Map
+            // GPS Locate Pill & Nearby Pros Count Badges
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -313,19 +330,47 @@ fun ClientHomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.96f),
+                        shape = RoundedCornerShape(99.dp),
+                        border = BorderStroke(1.dp, WepeHairline),
+                        shadowElevation = 6.dp
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                        ) {
+                            LivePulseDot(color = WepeEmerald, dotSize = 6.dp)
+                            Text(
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> "${filteredCraftsmen.size} حرفي متاح"
+                                    AppLanguage.FRENCH -> "${filteredCraftsmen.size} artisans"
+                                    AppLanguage.ENGLISH -> "${filteredCraftsmen.size} pros nearby"
+                                },
+                                color = ObsidianBlack,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     if (runtimeConfig.productionMode) {
                         Surface(
-                            color = VerifiedEmerald,
+                            color = WepeEmerald,
                             shape = RoundedCornerShape(99.dp),
                             shadowElevation = 6.dp
                         ) {
                             Text(
-                                text = "الوضع الإنتاجي المباشر",
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> "مباشر"
+                                    AppLanguage.FRENCH -> "En direct"
+                                    AppLanguage.ENGLISH -> "Live"
+                                },
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
                         }
                     }
@@ -336,18 +381,19 @@ fun ClientHomeScreen(
                             shadowElevation = 6.dp
                         ) {
                             Text(
-                                text = "الحساب معلق مؤقتاً",
+                                text = s.accountSuspendedMsg,
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
                         }
                     }
                 }
                 Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
+                    color = Color.White,
+                    border = BorderStroke(1.dp, WepeHairline),
                     shadowElevation = 8.dp
                 ) {
                     IconButton(
@@ -369,14 +415,14 @@ fun ClientHomeScreen(
                         Icon(
                             imageVector = Icons.Rounded.MyLocation,
                             contentDescription = "تحديد موقعي عبر GPS",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            tint = WepeEmerald
                         )
                     }
                 }
             }
         }
 
-        // 3. Bottom inDrive Interactive Sheets
+        // 3. Bottom Interactive White & Emerald Sheets
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -385,11 +431,11 @@ fun ClientHomeScreen(
         ) {
             when {
                 activeRequest == null -> {
-                    // STATE A: Authentic inDrive Passenger Service Sheet (Draggable & Clickable Up/Down)
+                    // STATE A: Crisp White & Emerald Client Service Sheet (Screens 1 & 2)
                     Card(
                         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 18.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
@@ -407,7 +453,7 @@ fun ClientHomeScreen(
                             )
 
                             if (!isPassengerSheetExpanded) {
-                                // Compact Peek Dock when scrolled/collapsed down
+                                // Compact Peek Dock when collapsed
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -416,26 +462,27 @@ fun ClientHomeScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Surface(
-                                        color = ObsidianBlack,
-                                        shape = RoundedCornerShape(14.dp),
+                                        color = WepeSoftCard,
+                                        shape = RoundedCornerShape(99.dp),
+                                        border = BorderStroke(1.dp, WepeHairline),
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(14.dp))
+                                            .clip(RoundedCornerShape(99.dp))
                                             .clickable { isPassengerSheetExpanded = true }
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
                                         ) {
                                             Icon(
                                                 imageVector = selectedCategory.icon,
                                                 contentDescription = null,
-                                                tint = ElectricLime,
+                                                tint = WepeEmerald,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                             Spacer(Modifier.width(6.dp))
                                             Text(
-                                                text = selectedCategory.nameAr,
-                                                color = Color.White,
+                                                text = selectedCategory.localizedName(s),
+                                                color = ObsidianBlack,
                                                 fontWeight = FontWeight.Bold,
                                                 fontSize = 13.sp
                                             )
@@ -445,10 +492,10 @@ fun ClientHomeScreen(
                                     Button(
                                         onClick = { viewModel.submitServiceRequest() },
                                         enabled = !isSubmittingRequest,
-                                        shape = RoundedCornerShape(16.dp),
+                                        shape = RoundedCornerShape(99.dp),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = ElectricLime,
-                                            contentColor = ObsidianBlack
+                                            containerColor = WepeEmerald,
+                                            contentColor = Color.White
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -458,12 +505,12 @@ fun ClientHomeScreen(
                                         if (isSubmittingRequest) {
                                             CircularProgressIndicator(
                                                 modifier = Modifier.size(18.dp),
-                                                color = ObsidianBlack,
+                                                color = Color.White,
                                                 strokeWidth = 2.dp
                                             )
                                             Spacer(Modifier.width(6.dp))
                                             Text(
-                                                text = "جاري الإرسال...",
+                                                text = s.loading,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 fontSize = 14.sp
                                             )
@@ -471,7 +518,7 @@ fun ClientHomeScreen(
                                             Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(6.dp))
                                             Text(
-                                                text = "ابحث بـ ${draft.proposedPrice} د.م",
+                                                text = "${s.search} • ${draft.proposedPrice} ${s.currencyDh}",
                                                 fontWeight = FontWeight.ExtraBold,
                                                 fontSize = 14.sp
                                             )
@@ -486,10 +533,7 @@ fun ClientHomeScreen(
                                 exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut()
                             ) {
                                 Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = maxSheetBodyHeight)
-                                        .verticalScroll(rememberScrollState()),
+                                    modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Row(
@@ -498,283 +542,510 @@ fun ClientHomeScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "ما الخدمة التي تحتاجها؟",
+                                            text = s.clientWhereNeedCraftsman,
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.ExtraBold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
-                                        TextButton(onClick = { isDetailsExpanded = !isDetailsExpanded }) {
-                                            Text(
-                                                if (isDetailsExpanded) "إخفاء التفاصيل" else "صورة وتفاصيل",
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            Icon(
-                                                imageVector = if (isDetailsExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-
-                            // inDrive Service Tiles Strip
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(horizontal = 2.dp)
-                            ) {
-                                items(HirafiCategories.all) { cat ->
-                                    val selected = cat.id == draft.selectedCategoryId
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = if (selected) ObsidianBlack else MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier
-                                            .border(
-                                                width = if (selected) 2.dp else 1.dp,
-                                                color = if (selected) ElectricLime else MaterialTheme.colorScheme.outline,
-                                                shape = RoundedCornerShape(16.dp)
-                                            )
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .clickable { viewModel.selectCategory(cat.id) }
-                                            .testTag("category_${cat.id}")
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = cat.icon,
-                                                contentDescription = cat.nameAr,
-                                                tint = if (selected) ElectricLime else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(
-                                                text = cat.nameAr,
-                                                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-                                                fontSize = 13.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Clean Nearby Craftsmen Pill
-                            val radiusText = if (searchRadiusKm >= 20) "الكل" else "$searchRadiusKm كم"
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = ElectricLimeSoft,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(1.dp, ElectricLime, RoundedCornerShape(16.dp))
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable { showCraftsmenSheet = true }
-                                    .testTag("browse_nearby_craftsmen_button")
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.PersonSearch,
-                                            contentDescription = null,
-                                            tint = ObsidianBlack,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Column {
-                                            val cloudSummary = if (cloudCraftsmenCount > 0) " • $cloudCraftsmenCount سحابي مباشر" else ""
-                                            Text(
-                                                text = "متاح ${filteredCraftsmen.size} حرفيين ($radiusText)$cloudSummary",
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = ObsidianBlack,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = "ابحث بالاسم أو صفِّ حسب المسافة والتقييم",
-                                                fontSize = 11.sp,
-                                                color = ObsidianBlack.copy(alpha = 0.72f),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    Surface(
-                                        color = ObsidianBlack,
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Tune,
-                                                contentDescription = null,
-                                                tint = ElectricLime,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(
-                                                text = "تصفح",
-                                                color = ElectricLime,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            SmartTriageCarousel(
-                                selectedCategoryId = draft.selectedCategoryId,
-                                currentTitle = draft.title,
-                                onSelectScenario = { scenario ->
-                                    viewModel.updateDraftTitle(scenario.titleAr)
-                                    viewModel.updateDraftDescription(scenario.descriptionAr)
-                                    viewModel.setDraftPrice(scenario.recommendedPriceDh)
-                                    viewModel.toggleUrgent(scenario.isUrgentSuggested)
-                                }
-                            )
-
-                            OutlinedTextField(
-                                value = draft.title,
-                                onValueChange = { viewModel.updateDraftTitle(it) },
-                                placeholder = { Text("صف المشكلة بإيجاز (مثلاً: إصلاح تسرب صنبور)") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("request_title_input")
-                            )
-
-                            AnimatedVisibility(visible = isDetailsExpanded) {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    OutlinedTextField(
-                                        value = draft.description,
-                                        onValueChange = { viewModel.updateDraftDescription(it) },
-                                        placeholder = { Text("تفاصيل إضافية للحرفي (اختياري)...") },
-                                        maxLines = 2,
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                                )
-                                            },
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier.height(48.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(if (draft.photoUri == null) "إرفاق صورة" else "تغيير الصورة")
-                                        }
-
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Rounded.Bolt,
-                                                contentDescription = null,
-                                                tint = UrgentCoral,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Text("طلب عاجل", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                            Spacer(Modifier.width(6.dp))
-                                            Switch(
-                                                checked = draft.isUrgent,
-                                                onCheckedChange = { viewModel.toggleUrgent(it) },
-                                                colors = SwitchDefaults.colors(checkedThumbColor = ObsidianBlack, checkedTrackColor = ElectricLime)
-                                            )
-                                        }
-                                    }
-
-                                    if (draft.photoUri != null) {
-                                        AsyncImage(
-                                            model = draft.photoUri,
-                                            contentDescription = "صورة العطل",
-                                            contentScale = ContentScale.Crop,
+                                        Surface(
+                                            color = if (isDetailsExpanded) WepeEmeraldSoft else WepeSoftCard,
+                                            shape = RoundedCornerShape(99.dp),
                                             modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(100.dp)
-                                                .clip(RoundedCornerShape(14.dp))
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        PaymentMethod.entries.forEach { method ->
-                                            FilterChip(
-                                                selected = draft.paymentMethod == method,
-                                                onClick = { viewModel.selectPaymentMethod(method) },
-                                                label = { Text(method.labelAr, fontSize = 12.sp) },
-                                                colors = FilterChipDefaults.filterChipColors(
-                                                    selectedContainerColor = ObsidianBlack,
-                                                    selectedLabelColor = ElectricLime
+                                                .clip(RoundedCornerShape(99.dp))
+                                                .clickable { isDetailsExpanded = !isDetailsExpanded }
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                            ) {
+                                                Text(
+                                                    text = when (s.language) {
+                                                        AppLanguage.ARABIC -> if (isDetailsExpanded) "إخفاء التفاصيل" else "صورة وتفاصيل"
+                                                        AppLanguage.FRENCH -> if (isDetailsExpanded) "Masquer" else "Photo & détails"
+                                                        AppLanguage.ENGLISH -> if (isDetailsExpanded) "Hide details" else "Photo & details"
+                                                    },
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isDetailsExpanded) WepeEmeraldDark else Color(0xFF475467)
                                                 )
-                                            )
+                                                Icon(
+                                                    imageVector = if (isDetailsExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                                    contentDescription = null,
+                                                    tint = if (isDetailsExpanded) WepeEmeraldDark else Color(0xFF475467),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
                                         }
                                     }
-                                }
-                            }
 
-                            PriceProposalBar(
-                                priceDh = draft.proposedPrice,
-                                recommendedMin = selectedCategory.minRecommendedDh,
-                                recommendedMax = selectedCategory.maxRecommendedDh,
-                                onAdjust = { viewModel.adjustDraftPrice(it) },
-                                onSetExact = { viewModel.setDraftPrice(it) }
-                            )
-
-                                    Button(
-                                        onClick = { viewModel.submitServiceRequest() },
-                                        enabled = !isSubmittingRequest,
-                                        shape = RoundedCornerShape(18.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = ElectricLime,
-                                            contentColor = ObsidianBlack
-                                        ),
+                                    // Scrollable Body: Stacked Route & Issue Box, Option Cards, Triage, Price Proposal
+                                    Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(54.dp)
-                                            .testTag("find_craftsman_button")
+                                            .heightIn(max = maxSheetBodyHeight)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        if (isSubmittingRequest) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                color = ObsidianBlack,
-                                                strokeWidth = 2.5.dp
+                                        // Screen 1 Stacked Location + Issue Input Card
+                                        Surface(
+                                            color = Color.White,
+                                            shape = RoundedCornerShape(18.dp),
+                                            border = BorderStroke(1.dp, WepeHairline),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp)) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .clickable { showLocationPicker = true }
+                                                        .padding(horizontal = 4.dp, vertical = 6.dp)
+                                                ) {
+                                                    Box(
+                                                        contentAlignment = Alignment.Center,
+                                                        modifier = Modifier
+                                                            .size(18.dp)
+                                                            .clip(CircleShape)
+                                                            .background(WepeEmeraldSoft)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(8.dp)
+                                                                .clip(CircleShape)
+                                                                .background(WepeEmerald)
+                                                        )
+                                                    }
+                                                    Spacer(Modifier.width(10.dp))
+                                                    Text(
+                                                        text = if (draft.isResolvingAddress) s.loading else draft.addressLabel,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = ObsidianBlack,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Edit,
+                                                        contentDescription = null,
+                                                        tint = WepeEmerald,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+
+                                                // Subtle vertical route connector line
+                                                Box(
+                                                    modifier = Modifier
+                                                        .padding(start = 12.dp, top = 2.dp, bottom = 4.dp)
+                                                        .width(2.dp)
+                                                        .height(10.dp)
+                                                        .background(WepeEmerald.copy(alpha = 0.45f))
+                                                )
+
+                                                OutlinedTextField(
+                                                    value = draft.title,
+                                                    onValueChange = { viewModel.updateDraftTitle(it) },
+                                                    placeholder = {
+                                                        Text(
+                                                            s.clientIssueTitleHint,
+                                                            fontSize = 13.sp,
+                                                            color = Color(0xFF98A2B3)
+                                                        )
+                                                    },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Rounded.Search,
+                                                            contentDescription = null,
+                                                            tint = WepeEmerald,
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    },
+                                                    singleLine = true,
+                                                    shape = RoundedCornerShape(14.dp),
+                                                    colors = OutlinedTextFieldDefaults.colors(
+                                                        focusedBorderColor = WepeEmerald,
+                                                        unfocusedBorderColor = WepeEmerald.copy(alpha = 0.65f),
+                                                        focusedContainerColor = Color.White,
+                                                        unfocusedContainerColor = Color.White
+                                                    ),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .testTag("request_title_input")
+                                                )
+                                            }
+                                        }
+
+                                        if (lastPastOrder != null) {
+                                            Surface(
+                                                color = Color.White,
+                                                shape = RoundedCornerShape(14.dp),
+                                                border = BorderStroke(1.dp, WepeEmerald.copy(alpha = 0.45f)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 48.dp)
+                                                    .clip(RoundedCornerShape(14.dp))
+                                                    .clickable { viewModel.prefillDraftFromRequest(lastPastOrder) }
+                                                    .testTag("reorder_last_service_chip")
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Box(
+                                                            contentAlignment = Alignment.Center,
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clip(CircleShape)
+                                                                .background(WepeEmeraldSoft)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Replay,
+                                                                contentDescription = null,
+                                                                tint = WepeEmeraldDark,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                        Column {
+                                                            Text(
+                                                                text = "إعادة طلب: ${lastPastOrder.title}",
+                                                                color = ObsidianBlack,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = "${lastPastOrder.categoryName} • ${lastPastOrder.acceptedPrice ?: lastPastOrder.proposedPrice} ${s.currencyDh}",
+                                                                color = WepeEmeraldDark,
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.SemiBold
+                                                            )
+                                                        }
+                                                    }
+                                                    Surface(
+                                                        color = WepeEmeraldSoft,
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "تكرار",
+                                                            color = WepeEmeraldDark,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Screen 2 Selectable Craft Option Cards (white cards, green border when active, Fastest badge)
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            HirafiCategories.all.forEachIndexed { idx, cat ->
+                                                val selected = cat.id == draft.selectedCategoryId
+                                                val etaLabel = when (idx) {
+                                                    0 -> "8 ${s.unitMin}"
+                                                    1 -> "10 ${s.unitMin}"
+                                                    2 -> "15 ${s.unitMin}"
+                                                    else -> "12 ${s.unitMin}"
+                                                }
+                                                Surface(
+                                                    shape = RoundedCornerShape(16.dp),
+                                                    color = if (selected) WepeEmeraldSoft.copy(alpha = 0.45f) else Color.White,
+                                                    border = BorderStroke(
+                                                        width = if (selected) 1.8.dp else 1.dp,
+                                                        color = if (selected) WepeEmerald else WepeHairline
+                                                    ),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(16.dp))
+                                                        .clickable { viewModel.selectCategory(cat.id) }
+                                                        .testTag("category_${cat.id}")
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) {
+                                                            Box(
+                                                                contentAlignment = Alignment.Center,
+                                                                modifier = Modifier
+                                                                    .size(44.dp)
+                                                                    .clip(RoundedCornerShape(12.dp))
+                                                                    .background(if (selected) WepeEmerald else WepeSoftCard)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = cat.icon,
+                                                                    contentDescription = cat.localizedName(s),
+                                                                    tint = if (selected) Color.White else cat.accentColor,
+                                                                    modifier = Modifier.size(22.dp)
+                                                                )
+                                                            }
+                                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                                Row(
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = cat.localizedName(s),
+                                                                        color = ObsidianBlack,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        fontSize = 14.sp
+                                                                    )
+                                                                    if (idx == 0 || selected) {
+                                                                        Surface(
+                                                                            color = WepeEmerald,
+                                                                            shape = RoundedCornerShape(6.dp)
+                                                                        ) {
+                                                                            Text(
+                                                                                text = when (s.language) {
+                                                                                    AppLanguage.ARABIC -> if (idx == 0) "الأسرع" else "مختار"
+                                                                                    AppLanguage.FRENCH -> if (idx == 0) "Plus rapide" else "Choisi"
+                                                                                    AppLanguage.ENGLISH -> if (idx == 0) "Fastest" else "Selected"
+                                                                                },
+                                                                                color = Color.White,
+                                                                                fontSize = 9.sp,
+                                                                                fontWeight = FontWeight.Bold,
+                                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Text(
+                                                                    text = "⏱ $etaLabel • ${cat.minRecommendedDh}–${cat.maxRecommendedDh} ${s.currencyDh}",
+                                                                    fontSize = 11.sp,
+                                                                    color = Color(0xFF667085)
+                                                                )
+                                                            }
+                                                        }
+                                                        Text(
+                                                            text = "${cat.defaultPriceDh} ${s.currencyDh}",
+                                                            fontSize = 15.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = if (selected) WepeEmeraldDark else ObsidianBlack
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        SmartTriageCarousel(
+                                            selectedCategoryId = draft.selectedCategoryId,
+                                            currentTitle = draft.title,
+                                            onSelectScenario = { scenario ->
+                                                viewModel.updateDraftTitle(scenario.titleAr)
+                                                viewModel.updateDraftDescription(scenario.descriptionAr)
+                                                viewModel.setDraftPrice(scenario.recommendedPriceDh)
+                                                viewModel.toggleUrgent(scenario.isUrgentSuggested)
+                                            }
+                                        )
+
+                                        AnimatedVisibility(visible = isDetailsExpanded) {
+                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                OutlinedTextField(
+                                                    value = draft.description,
+                                                    onValueChange = { viewModel.updateDraftDescription(it) },
+                                                    placeholder = {
+                                                        Text(
+                                                            when (s.language) {
+                                                                AppLanguage.ARABIC -> "تفاصيل إضافية للحرفي (اختياري)..."
+                                                                AppLanguage.FRENCH -> "Détails supplémentaires (optionnel)..."
+                                                                AppLanguage.ENGLISH -> "Extra details for the pro (optional)..."
+                                                            }
+                                                        )
+                                                    },
+                                                    maxLines = 2,
+                                                    shape = RoundedCornerShape(14.dp),
+                                                    colors = OutlinedTextFieldDefaults.colors(
+                                                        focusedBorderColor = WepeEmerald,
+                                                        unfocusedBorderColor = WepeHairline
+                                                    ),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            photoPickerLauncher.launch(
+                                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                            )
+                                                        },
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        border = BorderStroke(1.dp, WepeHairline),
+                                                        modifier = Modifier.height(48.dp)
+                                                    ) {
+                                                        Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(18.dp))
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Text(
+                                                            when (s.language) {
+                                                                AppLanguage.ARABIC -> if (draft.photoUri == null) "إرفاق صورة" else "تغيير الصورة"
+                                                                AppLanguage.FRENCH -> if (draft.photoUri == null) "Ajouter photo" else "Changer"
+                                                                AppLanguage.ENGLISH -> if (draft.photoUri == null) "Add Photo" else "Change"
+                                                            },
+                                                            color = ObsidianBlack,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                    }
+
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Icon(
+                                                            Icons.Rounded.Bolt,
+                                                            contentDescription = null,
+                                                            tint = UrgentCoral,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                        Text(s.filterUrgent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = ObsidianBlack)
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Switch(
+                                                            checked = draft.isUrgent,
+                                                            onCheckedChange = { viewModel.toggleUrgent(it) },
+                                                            colors = SwitchDefaults.colors(
+                                                                checkedThumbColor = Color.White,
+                                                                checkedTrackColor = WepeEmerald
+                                                            )
+                                                        )
+                                                    }
+                                                }
+
+                                                if (draft.photoUri != null) {
+                                                    AsyncImage(
+                                                        model = draft.photoUri,
+                                                        contentDescription = "Photo",
+                                                        contentScale = ContentScale.Crop,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(100.dp)
+                                                            .clip(RoundedCornerShape(14.dp))
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        PriceProposalBar(
+                                            priceDh = draft.proposedPrice,
+                                            recommendedMin = selectedCategory.minRecommendedDh,
+                                            recommendedMax = selectedCategory.maxRecommendedDh,
+                                            onAdjust = { viewModel.adjustDraftPrice(it) },
+                                            onSetExact = { viewModel.setDraftPrice(it) }
+                                        )
+                                    }
+
+                                    // Screen 2 Sticky Payment + Primary Pill CTA + Circular Nearby Browse Button
+                                    HorizontalDivider(color = WepeHairline)
+
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        item {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Payments,
+                                                contentDescription = null,
+                                                tint = WepeEmerald,
+                                                modifier = Modifier.size(18.dp)
                                             )
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                text = "جاري إرسال طلبك...",
-                                                fontSize = 16.sp,
-                                                fontWeight = FontWeight.ExtraBold
-                                            )
-                                        } else {
-                                            Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(22.dp))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                text = "البحث عن حرفي بـ ${draft.proposedPrice} د.م",
-                                                fontSize = 16.sp,
-                                                fontWeight = FontWeight.ExtraBold
-                                            )
+                                        }
+                                        items(PaymentMethod.entries) { method ->
+                                            val isSelected = draft.paymentMethod == method
+                                            Surface(
+                                                color = if (isSelected) WepeEmeraldSoft else WepeSoftCard,
+                                                shape = RoundedCornerShape(99.dp),
+                                                border = BorderStroke(
+                                                    width = 1.dp,
+                                                    color = if (isSelected) WepeEmerald else WepeHairline
+                                                ),
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(99.dp))
+                                                    .clickable { viewModel.selectPaymentMethod(method) }
+                                            ) {
+                                                Text(
+                                                    text = method.localizedLabel(s),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                    color = if (isSelected) WepeEmeraldDark else Color(0xFF475467),
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Button(
+                                            onClick = { viewModel.submitServiceRequest() },
+                                            enabled = !isSubmittingRequest,
+                                            shape = RoundedCornerShape(99.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = WepeEmerald,
+                                                contentColor = Color.White
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(54.dp)
+                                                .testTag("find_craftsman_button")
+                                        ) {
+                                            if (isSubmittingRequest) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(20.dp),
+                                                    color = Color.White,
+                                                    strokeWidth = 2.5.dp
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = s.loading,
+                                                    fontSize = 16.sp,
+                                                    fontWeight = FontWeight.ExtraBold
+                                                )
+                                            } else {
+                                                Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = "${s.clientPublishRequest} • ${draft.proposedPrice} ${s.currencyDh}",
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+
+                                        val radiusText = if (searchRadiusKm >= 20) s.all else "$searchRadiusKm ${s.unitKm}"
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = WepeEmeraldSoft,
+                                            border = BorderStroke(1.5.dp, WepeEmerald),
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .clickable { showCraftsmenSheet = true }
+                                                .testTag("browse_nearby_craftsmen_button")
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PersonSearch,
+                                                    contentDescription = "تصفح ${filteredCraftsmen.size} حرفي ($radiusText)",
+                                                    tint = WepeEmeraldDark,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -804,9 +1075,9 @@ fun ClientHomeScreen(
                             ) {
                                 items(sortedOffers, key = { it.id }) { offer ->
                                     val badge = when (offerSort) {
-                                        OfferSortOption.BEST_PRICE -> if (offer.id == bestPriceId) "الأقل سعراً" else null
-                                        OfferSortOption.FASTEST_ETA -> if (offer.id == fastestId) "الأسرع وصولاً" else null
-                                        OfferSortOption.TOP_RATED -> if (offer.id == topRatedId) "الأعلى تقييماً" else null
+                                        OfferSortOption.BEST_PRICE -> if (offer.id == bestPriceId) OfferSortOption.BEST_PRICE.localizedLabel(s) else null
+                                        OfferSortOption.FASTEST_ETA -> if (offer.id == fastestId) OfferSortOption.FASTEST_ETA.localizedLabel(s) else null
+                                        OfferSortOption.TOP_RATED -> if (offer.id == topRatedId) OfferSortOption.TOP_RATED.localizedLabel(s) else null
                                     }
                                     IncomingOfferCard(
                                         offer = offer,
@@ -823,8 +1094,8 @@ fun ClientHomeScreen(
 
                         Card(
                             shape = RoundedCornerShape(26.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
@@ -844,17 +1115,18 @@ fun ClientHomeScreen(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = if (sortedOffers.isEmpty())
-                                                "جاري إرسال طلبك لحرفيي ${req.categoryName}..."
+                                                s.statusSearching
                                             else
-                                                "وصلك ${sortedOffers.size} عروض — اختر الأنسب لك",
+                                                "${s.clientOffersIncoming} (${sortedOffers.size})",
                                             style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.ExtraBold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
-                                        val radiusLabel = if (searchRadiusKm >= 20) "كامل المدينة" else "$searchRadiusKm كم"
+                                        val radiusLabel = if (searchRadiusKm >= 20) s.all else "$searchRadiusKm ${s.unitKm}"
                                         Text(
-                                            text = "${req.categoryName} • السعر: ${req.proposedPrice} د.م • النطاق: $radiusLabel",
+                                            text = "${HirafiCategories.byId(req.categoryId).localizedName(s)} • ${req.proposedPrice} ${s.currencyDh} • $radiusLabel",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = Color(0xFF667085)
                                         )
                                     }
                                     IconButton(
@@ -863,7 +1135,7 @@ fun ClientHomeScreen(
                                             .size(48.dp)
                                             .testTag("cancel_searching_button")
                                     ) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "إلغاء الطلب", tint = UrgentCoral)
+                                        Icon(Icons.Rounded.Close, contentDescription = s.cancel, tint = UrgentCoral)
                                     }
                                 }
 
@@ -873,118 +1145,122 @@ fun ClientHomeScreen(
                                     exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut()
                                 ) {
                                     Column {
-
-                                Spacer(Modifier.height(8.dp))
-                                LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    item {
-                                        FilterChip(
-                                            selected = true,
-                                            onClick = { showRealtimeBiddingSheet = true },
-                                            leadingIcon = {
-                                                Icon(
-                                                    Icons.Rounded.Gavel,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(15.dp)
+                                        Spacer(Modifier.height(8.dp))
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            item {
+                                                FilterChip(
+                                                    selected = true,
+                                                    onClick = { showRealtimeBiddingSheet = true },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            Icons.Rounded.Gavel,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(15.dp)
+                                                        )
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = when (s.language) {
+                                                                AppLanguage.ARABIC -> "غرفة المزايدة"
+                                                                AppLanguage.FRENCH -> "Enchères"
+                                                                AppLanguage.ENGLISH -> "Bidding Room"
+                                                            },
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    },
+                                                    colors = FilterChipDefaults.filterChipColors(
+                                                        selectedContainerColor = WepeEmerald,
+                                                        selectedLabelColor = Color.White,
+                                                        selectedLeadingIconColor = Color.White
+                                                    ),
+                                                    modifier = Modifier.testTag("open_realtime_bidding_sheet")
                                                 )
-                                            },
-                                            label = {
-                                                Text(
-                                                    "غرفة المزايدة",
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            },
-                                            colors = FilterChipDefaults.filterChipColors(
-                                                selectedContainerColor = ObsidianBlack,
-                                                selectedLabelColor = ElectricLime,
-                                                selectedLeadingIconColor = ElectricLime
-                                            ),
-                                            modifier = Modifier.testTag("open_realtime_bidding_sheet")
-                                        )
-                                    }
-                                    if (sortedOffers.size > 1) {
-                                        items(OfferSortOption.entries) { sortOpt ->
-                                            FilterChip(
-                                                selected = offerSort == sortOpt,
-                                                onClick = { viewModel.setOfferSort(sortOpt) },
-                                                label = { Text(sortOpt.labelAr, fontSize = 11.sp) },
-                                                colors = FilterChipDefaults.filterChipColors(
-                                                    selectedContainerColor = ObsidianBlack,
-                                                    selectedLabelColor = ElectricLime
-                                                ),
-                                                modifier = Modifier.testTag("offer_sort_${sortOpt.name.lowercase()}")
-                                            )
-                                        }
-                                    }
-                                    if (searchRadiusKm < 20) {
-                                        val nextRadius = if (searchRadiusKm < 10) 10 else 20
-                                        val nextLabel = if (nextRadius >= 20) "توسيع لكل المدينة" else "توسيع النطاق (+$nextRadius كم)"
-                                        item {
-                                            FilterChip(
-                                                selected = false,
-                                                onClick = { viewModel.expandActiveSearchRadius(nextRadius) },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        Icons.Rounded.NearMe,
-                                                        contentDescription = null,
-                                                        modifier = Modifier.size(15.dp),
-                                                        tint = VerifiedEmerald
+                                            }
+                                            if (sortedOffers.size > 1) {
+                                                items(OfferSortOption.entries) { sortOpt ->
+                                                    FilterChip(
+                                                        selected = offerSort == sortOpt,
+                                                        onClick = { viewModel.setOfferSort(sortOpt) },
+                                                        label = { Text(sortOpt.localizedLabel(s), fontSize = 11.sp) },
+                                                        colors = FilterChipDefaults.filterChipColors(
+                                                            selectedContainerColor = WepeEmerald,
+                                                            selectedLabelColor = Color.White
+                                                        ),
+                                                        modifier = Modifier.testTag("offer_sort_${sortOpt.name.lowercase()}")
                                                     )
-                                                },
-                                                label = {
-                                                    Text(
-                                                        nextLabel,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = VerifiedEmerald
+                                                }
+                                            }
+                                            if (searchRadiusKm < 20) {
+                                                val nextRadius = if (searchRadiusKm < 10) 10 else 20
+                                                val nextLabel = "+$nextRadius ${s.unitKm}"
+                                                item {
+                                                    FilterChip(
+                                                        selected = false,
+                                                        onClick = { viewModel.expandActiveSearchRadius(nextRadius) },
+                                                        leadingIcon = {
+                                                            Icon(
+                                                                Icons.Rounded.NearMe,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(15.dp),
+                                                                tint = WepeEmerald
+                                                            )
+                                                        },
+                                                        label = {
+                                                            Text(
+                                                                nextLabel,
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = WepeEmeraldDark
+                                                            )
+                                                        },
+                                                        modifier = Modifier.testTag("expand_search_radius_button")
                                                     )
-                                                },
-                                                modifier = Modifier.testTag("expand_search_radius_button")
-                                            )
+                                                }
+                                            }
                                         }
-                                    }
-                                }
 
-                                Spacer(Modifier.height(10.dp))
+                                        Spacer(Modifier.height(10.dp))
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { viewModel.raiseActiveRequestPrice(-10) },
-                                        shape = RoundedCornerShape(14.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp)
-                                    ) {
-                                        Text("-10 د.م", fontWeight = FontWeight.Bold)
-                                    }
-                                    Button(
-                                        onClick = { viewModel.raiseActiveRequestPrice(10) },
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
-                                        modifier = Modifier
-                                            .weight(1.3f)
-                                            .height(48.dp)
-                                            .testTag("raise_fare_plus_10")
-                                    ) {
-                                        Text("رفع السعر +10", fontWeight = FontWeight.ExtraBold)
-                                    }
-                                    Button(
-                                        onClick = { viewModel.raiseActiveRequestPrice(20) },
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = ObsidianBlack, contentColor = ElectricLime),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp)
-                                    ) {
-                                        Text("+20 د.م", fontWeight = FontWeight.Bold)
-                                    }
-                                }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = { viewModel.raiseActiveRequestPrice(-10) },
+                                                shape = RoundedCornerShape(99.dp),
+                                                border = BorderStroke(1.dp, WepeHairline),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(48.dp)
+                                            ) {
+                                                Text("-10 ${s.currencyDh}", fontWeight = FontWeight.Bold, color = ObsidianBlack)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.raiseActiveRequestPrice(10) },
+                                                shape = RoundedCornerShape(99.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
+                                                modifier = Modifier
+                                                    .weight(1.3f)
+                                                    .height(48.dp)
+                                                    .testTag("raise_fare_plus_10")
+                                            ) {
+                                                Text("+10 ${s.currencyDh}", fontWeight = FontWeight.ExtraBold)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.raiseActiveRequestPrice(20) },
+                                                shape = RoundedCornerShape(99.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = WepeEmeraldDark, contentColor = Color.White),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(48.dp)
+                                            ) {
+                                                Text("+20 ${s.currencyDh}", fontWeight = FontWeight.Bold)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -997,6 +1273,7 @@ fun ClientHomeScreen(
                     ActiveJobSheet(
                         request = req,
                         liveRoute = liveRoute,
+                        unreadChatCount = unreadChatCounts[req.id] ?: 0,
                         onCallClick = { phone ->
                             val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
                             context.startActivity(dialIntent)
@@ -1004,7 +1281,7 @@ fun ClientHomeScreen(
                         onChatClick = { onOpenChat(req.id) },
                         onSafetyClick = onOpenSafety,
                         onAdvanceStatus = { nextStatus -> viewModel.advanceJobStatus(req, nextStatus) },
-                        onCancel = { viewModel.cancelActiveRequest() }
+                        onCancel = { viewModel.cancelActiveRequest(req.id) }
                     )
                 }
             }
@@ -1017,7 +1294,8 @@ fun ClientHomeScreen(
                 showLocationPicker = false
                 viewModel.clearPlaceSearchResults()
             },
-            title = { Text("ابحث عن عنوان أو اختر حياً", fontWeight = FontWeight.Bold) },
+            containerColor = Color.White,
+            title = { Text("ابحث عن عنوان أو اختر حياً", fontWeight = FontWeight.Bold, color = ObsidianBlack) },
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1033,23 +1311,31 @@ fun ClientHomeScreen(
                             placeholder = { Text("ابحث عن شارع أو حي...") },
                             singleLine = true,
                             shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WepeEmerald,
+                                unfocusedBorderColor = WepeHairline
+                            ),
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(onClick = { viewModel.searchPlaces(context, searchQuery) }) {
-                            Icon(Icons.Rounded.Search, contentDescription = "بحث")
+                            Icon(Icons.Rounded.Search, contentDescription = "بحث", tint = WepeEmerald)
                         }
                     }
 
                     if (isSearchingPlaces) {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally).size(24.dp))
+                        CircularProgressIndicator(
+                            color = WepeEmerald,
+                            modifier = Modifier.align(Alignment.CenterHorizontally).size(24.dp)
+                        )
                     }
 
                     if (placeResults.isNotEmpty()) {
-                        Text("نتائج البحث:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("نتائج البحث:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = WepeEmeraldDark)
                         placeResults.forEach { res ->
                             Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
+                                color = WepeEmeraldSoft,
                                 shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, WepeEmerald.copy(alpha = 0.35f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -1059,19 +1345,19 @@ fun ClientHomeScreen(
                                     }
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(10.dp)) {
-                                    Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = ObsidianBlack)
+                                    Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = WepeEmeraldDark)
                                     Spacer(Modifier.width(8.dp))
-                                    Text(res.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text(res.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ObsidianBlack)
                                 }
                             }
                         }
-                        HorizontalDivider()
+                        HorizontalDivider(color = WepeHairline)
                     }
 
-                    Text("أحياء مشهورة:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("أحياء مشهورة:", fontSize = 12.sp, color = Color(0xFF667085))
                     MoroccanLocations.neighborhoods.forEach { n ->
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            color = WepeSoftCard,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1084,9 +1370,9 @@ fun ClientHomeScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(11.dp)
                             ) {
-                                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = VerifiedEmerald)
+                                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = WepeEmerald)
                                 Spacer(Modifier.width(8.dp))
-                                Text(n.nameAr, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Text(n.nameAr, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ObsidianBlack)
                             }
                         }
                     }
@@ -1098,7 +1384,7 @@ fun ClientHomeScreen(
                         showLocationPicker = false
                         viewModel.clearPlaceSearchResults()
                     }
-                ) { Text("إغلاق") }
+                ) { Text("إغلاق", color = WepeEmeraldDark, fontWeight = FontWeight.Bold) }
             }
         )
     }

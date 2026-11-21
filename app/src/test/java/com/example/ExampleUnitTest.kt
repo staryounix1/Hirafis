@@ -1,11 +1,14 @@
 package com.example
 
+import androidx.compose.ui.unit.LayoutDirection
 import com.example.data.location.RealTimeLocationService
 import com.example.data.model.AcceptanceRadarMetrics
 import com.example.data.model.AccountRolePolicy
 import com.example.data.model.AdminAuthorizationPolicy
+import com.example.data.model.AdminUserRecord
 import com.example.data.model.AppRuntimeConfig
 import com.example.data.model.BiddingSessionSummary
+import com.example.data.model.ChatMessage
 import com.example.data.model.CounterOfferSubmission
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.CraftsmanSortOption
@@ -26,17 +29,27 @@ import com.example.data.model.PortfolioItem
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
-import com.example.data.model.ChatMessage
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.data.remote.GoogleIdTokenFallbackToBrowserException
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseConfig
+import com.example.data.remote.SupabaseRecoverRequest
+import com.example.data.remote.SupabaseSessionManager
 import com.example.data.remote.SupabaseTimestampParser
 import com.example.data.repository.HirafiRepository
+import com.example.ui.components.CraftsmanRequestFilter
+import com.example.ui.components.HirafiProAnalytics
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.HirafiI18n
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
+import com.example.ui.screens.AdminDashboardAnalytics
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -677,5 +690,175 @@ class ExampleUnitTest {
       clientCity = "الدار البيضاء"
     )
     assertEquals(listOf("cloud_same_city_far"), filtered.map { it.id })
+  }
+
+  @Test
+  fun `google oauth callback parser extracts fragment tokens and error descriptions cleanly`() {
+    val successUri = "hirafi://auth-callback#access_token=jwt.access.token&refresh_token=ref_123&expires_in=3600&token_type=bearer"
+    val params = SupabaseSessionManager.parseOAuthCallbackParams(successUri)
+    assertEquals("jwt.access.token", params["access_token"])
+    assertEquals("ref_123", params["refresh_token"])
+    assertEquals("3600", params["expires_in"])
+
+    val errorUri = "hirafi://auth-callback?error=access_denied&error_description=User%20cancelled%20login"
+    val errParams = SupabaseSessionManager.parseOAuthCallbackParams(errorUri)
+    assertEquals("access_denied", errParams["error"])
+    assertEquals("User cancelled login", errParams["error_description"])
+
+    val authorizeUrl = SupabaseConfig.googleAuthorizeUrl()
+    assertTrue(authorizeUrl.contains("provider=google"))
+    assertTrue(authorizeUrl.contains("hirafi%3A%2F%2Fauth-callback"))
+
+    val fallbackEx = GoogleIdTokenFallbackToBrowserException("audience mismatch")
+    assertNotNull(fallbackEx)
+    assertEquals("audience mismatch", fallbackEx.message)
+  }
+
+  @Test
+  fun `pro analytics filters sorts craftsman requests and formats market delta and quick replies`() {
+    val now = 1_000_000_000L
+    val base = ServiceRequest(
+      id = "r1",
+      clientId = "c1",
+      clientName = "يونس",
+      categoryId = "plumbing",
+      categoryName = "سباكة",
+      title = "تسرب",
+      description = "",
+      addressLabel = "المعاريف",
+      lat = 33.5822,
+      lng = -7.6324,
+      mapX = 0.5f,
+      mapY = 0.5f,
+      proposedPrice = 140,
+      acceptedPrice = null,
+      paymentMethod = PaymentMethod.CASH,
+      isUrgent = false,
+      status = RequestStatus.SEARCHING,
+      assignedCraftsmanId = null,
+      assignedCraftsmanName = null,
+      assignedCraftsmanPhone = null,
+      assignedCraftsmanRating = null,
+      photoUri = null,
+      createdAtMillis = now - 5 * 60_000L,
+      updatedAtMillis = now
+    )
+    val reqs = listOf(
+      base,
+      base.copy(id = "r2_high", proposedPrice = 240, isUrgent = false, lat = 33.6500, lng = -7.5000, createdAtMillis = now - 60_000L),
+      base.copy(id = "r3_urgent_near", proposedPrice = 175, isUrgent = true, lat = 33.5830, lng = -7.6320, createdAtMillis = now - 10 * 60_000L)
+    )
+
+    val urgentOnly = HirafiProAnalytics.filterAndSortOpenRequests(reqs, CraftsmanRequestFilter.URGENT, 33.5822, -7.6324)
+    assertEquals(listOf("r3_urgent_near"), urgentOnly.map { it.id })
+
+    val highest = HirafiProAnalytics.filterAndSortOpenRequests(reqs, CraftsmanRequestFilter.HIGHEST_PRICE, 33.5822, -7.6324)
+    assertEquals(listOf("r2_high", "r3_urgent_near", "r1"), highest.map { it.id })
+
+    val nearest = HirafiProAnalytics.filterAndSortOpenRequests(reqs, CraftsmanRequestFilter.NEAREST, 33.5822, -7.6324)
+    assertEquals("r1", nearest.first().id)
+
+    assertEquals(25, HirafiProAnalytics.marketPriceDeltaPercent(175, 100, 180))
+    assertEquals("الآن", HirafiProAnalytics.formatRelativeArabicAge(now - 20_000L, now))
+    assertEquals("منذ 5 د", HirafiProAnalytics.formatRelativeArabicAge(now - 5 * 60_000L, now))
+    assertEquals("منذ 2 س", HirafiProAnalytics.formatRelativeArabicAge(now - 2 * 3_600_000L, now))
+
+    val craftsmanReplies = HirafiProAnalytics.roleAwareQuickReplies(UserRole.CRAFTSMAN)
+    val clientReplies = HirafiProAnalytics.roleAwareQuickReplies(UserRole.CLIENT)
+    assertTrue(craftsmanReplies.any { it.contains("في الطريق") })
+    assertTrue(clientReplies.any { it.contains("في الانتظار") })
+    assertFalse(craftsmanReplies == clientReplies)
+  }
+
+  @Test
+  fun `multilingual i18n engine provides arabic rtl french and english ltr strings and localized analytics`() {
+    assertEquals(LayoutDirection.Rtl, AppLanguage.ARABIC.layoutDirection)
+    assertEquals(LayoutDirection.Ltr, AppLanguage.FRENCH.layoutDirection)
+    assertEquals(LayoutDirection.Ltr, AppLanguage.ENGLISH.layoutDirection)
+    assertEquals(AppLanguage.FRENCH, AppLanguage.fromCode("FR"))
+    assertEquals(AppLanguage.ARABIC, AppLanguage.fromCode("unknown"))
+
+    AppLanguage.entries.forEach { lang ->
+      val s = HirafiI18n.forLanguage(lang)
+      assertEquals(lang, s.language)
+      assertTrue(s.appTitle.isNotBlank())
+      assertTrue(s.adminTitle.isNotBlank())
+      assertTrue(s.authForgotPassword.isNotBlank())
+      assertTrue(s.adminRejectPresets.size >= 3)
+      assertTrue(UserRole.CRAFTSMAN.localizedLabel(s).isNotBlank())
+      assertTrue(RequestStatus.EN_ROUTE.localizedLabel(s).isNotBlank())
+      assertTrue(HirafiCategories.byId("plumbing").localizedName(s).isNotBlank())
+
+      val now = 2_000_000_000L
+      assertTrue(HirafiProAnalytics.formatRelativeAge(now - 10_000L, now, lang).isNotBlank())
+      assertTrue(HirafiProAnalytics.roleAwareQuickReplies(UserRole.CLIENT, lang).isNotEmpty())
+      assertTrue(HirafiProAnalytics.roleAwareQuickReplies(UserRole.CRAFTSMAN, lang).isNotEmpty())
+    }
+  }
+
+  @Test
+  fun `password recovery dto and login validator enforce email and password constraints`() {
+    val recoverReq = SupabaseRecoverRequest(email = "craftsman@hirafi.ma")
+    assertEquals("craftsman@hirafi.ma", recoverReq.email)
+
+    assertTrue(LoginValidator.isValidEmail("pro@hirafi.ma"))
+    assertFalse(LoginValidator.isValidEmail("not-an-email"))
+    assertFalse(LoginValidator.isValidPassword("123"))
+    assertTrue(LoginValidator.isValidPassword("StrongPass!9"))
+  }
+
+  @Test
+  fun `admin dashboard analytics computes GMV completion rate top categories and filters users and requests`() {
+    val baseReq = ServiceRequest(
+      id = "r1",
+      clientId = "u1",
+      clientName = "يوسف",
+      categoryId = "plumbing",
+      categoryName = "سباكة",
+      title = "إصلاح تسرب",
+      description = "",
+      addressLabel = "المعاريف",
+      lat = 33.58,
+      lng = -7.63,
+      mapX = 0.5f,
+      mapY = 0.5f,
+      proposedPrice = 150,
+      acceptedPrice = 180,
+      paymentMethod = PaymentMethod.CASH,
+      isUrgent = false,
+      status = RequestStatus.COMPLETED,
+      assignedCraftsmanId = "c1",
+      assignedCraftsmanName = "كمال",
+      assignedCraftsmanPhone = null,
+      assignedCraftsmanRating = 4.9,
+      photoUri = null,
+      createdAtMillis = 1000L,
+      updatedAtMillis = 2000L
+    )
+    val requests = listOf(
+      baseReq,
+      baseReq.copy(id = "r2", categoryId = "plumbing", status = RequestStatus.COMPLETED, acceptedPrice = 120),
+      baseReq.copy(id = "r3", categoryId = "electricity", status = RequestStatus.EN_ROUTE, acceptedPrice = 200),
+      baseReq.copy(id = "r4", categoryId = "ac", status = RequestStatus.CANCELLED, acceptedPrice = null, proposedPrice = 300)
+    )
+
+    val metrics = AdminDashboardAnalytics.computeOverviewMetrics(requests)
+    assertEquals(300, metrics.totalGmvDh)
+    assertEquals(50, metrics.completionRatePct)
+    assertEquals(2, metrics.completedCount)
+    assertEquals(1, metrics.activeCount)
+    assertEquals(1, metrics.cancelledCount)
+    assertEquals("plumbing", metrics.topCategories.first().first)
+    assertEquals(2, metrics.topCategories.first().second)
+
+    val users = listOf(
+      AdminUserRecord("u1", "أنس العلوي", "anas@hirafi.ma", "الدار البيضاء", UserRole.CLIENT, "plumbing", IdentityVerificationStatus.NOT_SUBMITTED, false, true, 100L),
+      AdminUserRecord("u2", "كريم الحرفي", "karim@hirafi.ma", "مراكش", UserRole.CRAFTSMAN, "plumbing", IdentityVerificationStatus.VERIFIED, false, false, 200L)
+    )
+    assertEquals(listOf("u2"), AdminDashboardAnalytics.filterUsers(users, UserRole.CRAFTSMAN, "مراكش").map { it.userId })
+    assertEquals(listOf("u1"), AdminDashboardAnalytics.filterUsers(users, null, "anas@").map { it.userId })
+
+    assertEquals(listOf("r3"), AdminDashboardAnalytics.filterRequests(requests, RequestStatus.EN_ROUTE, "كمال").map { it.id })
+    assertTrue(AdminDashboardAnalytics.filterRequests(requests, null, "غير موجود").isEmpty())
   }
 }

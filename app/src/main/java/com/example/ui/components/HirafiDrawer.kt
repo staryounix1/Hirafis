@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LocationCity
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Person
@@ -34,6 +35,10 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
 import coil.compose.AsyncImage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -76,16 +81,23 @@ import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeSoftCard
 
 @Composable
 fun HirafiDrawerContent(
     session: UserSession,
     currentRoute: String,
+    appLanguage: AppLanguage = AppLanguage.ARABIC,
     onNavigate: (String) -> Unit,
     onCityClick: () -> Unit,
+    onLanguageClick: () -> Unit = {},
     onLogout: () -> Unit
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
+    val s = hirafiStrings()
 
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.surface,
@@ -121,7 +133,7 @@ fun HirafiDrawerContent(
                         modifier = Modifier
                             .size(50.dp)
                             .clip(CircleShape)
-                            .background(ObsidianBlack)
+                            .background(WepeEmerald)
                     ) {
                         if (!session.avatarUri.isNullOrBlank()) {
                             AsyncImage(
@@ -133,7 +145,7 @@ fun HirafiDrawerContent(
                         } else {
                             Text(
                                 text = session.fullName.take(1),
-                                color = ElectricLime,
+                                color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 20.sp
                             )
@@ -166,7 +178,7 @@ fun HirafiDrawerContent(
                         ) {
                             Icon(Icons.Rounded.Star, contentDescription = null, tint = StarAmber, modifier = Modifier.size(14.dp))
                             Text(
-                                text = "4.9 • ${session.role.labelAr}",
+                                text = "4.9 • ${session.role.localizedLabel(s)}",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -188,7 +200,7 @@ fun HirafiDrawerContent(
                             ) {
                                 Icon(Icons.Rounded.Lock, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(12.dp))
                                 Text(
-                                    text = "مهنة واحدة: ${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr}",
+                                    text = HirafiCategories.byId(session.craftsmanSpecialtyId).localizedName(s),
                                     color = VerifiedEmerald,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -204,25 +216,25 @@ fun HirafiDrawerContent(
 
                 DrawerNavItem(
                     label = when (session.role) {
-                        UserRole.ADMIN -> "لوحة تحكم الأدمين"
-                        UserRole.CRAFTSMAN -> "الطلبات الواردة والخريطة"
-                        UserRole.CLIENT -> "طلب خدمة (الخريطة)"
+                        UserRole.ADMIN -> s.navAdminDashboard
+                        UserRole.CRAFTSMAN -> s.navCraftsmanHome
+                        UserRole.CLIENT -> s.navClientHome
                     },
                     icon = Icons.Rounded.Home,
                     selected = currentRoute == "home",
                     onClick = { onNavigate("home") }
                 )
                 DrawerNavItem(
-                    label = "الملف الشخصي",
+                    label = s.navProfile,
                     icon = Icons.Rounded.Person,
                     selected = currentRoute == "profile",
-                    badgeText = if (session.role == UserRole.CRAFTSMAN) "معرض الأعمال" else null,
+                    badgeText = if (session.role == UserRole.CRAFTSMAN) s.navPortfolioBadge else null,
                     onClick = { onNavigate("profile") },
                     testTag = "drawer_profile_item"
                 )
                 if (session.role != UserRole.ADMIN) {
                     DrawerNavItem(
-                        label = "سجل الطلبات والضمانات",
+                        label = s.navOrders,
                         icon = Icons.Rounded.History,
                         selected = currentRoute == "orders",
                         onClick = { onNavigate("orders") }
@@ -231,16 +243,16 @@ fun HirafiDrawerContent(
                 if (AccountRolePolicy.canAccessIdentityVerification(session)) {
                     val (badgeLabel, badgeContainer, badgeTextColor) = when (session.verificationStatus) {
                         IdentityVerificationStatus.VERIFIED ->
-                            Triple("موثّق ✓", VerifiedEmeraldSoft, VerifiedEmerald)
+                            Triple("${s.kycVerified} ✓", VerifiedEmeraldSoft, VerifiedEmerald)
                         IdentityVerificationStatus.PENDING_REVIEW ->
-                            Triple("قيد المراجعة", ElectricLimeSoft, ObsidianBlack)
+                            Triple(s.kycPending, ElectricLimeSoft, ObsidianBlack)
                         IdentityVerificationStatus.REJECTED ->
-                            Triple("مرفوض", UrgentCoralSoft, UrgentCoral)
+                            Triple(s.kycRejected, UrgentCoralSoft, UrgentCoral)
                         IdentityVerificationStatus.NOT_SUBMITTED ->
-                            Triple("مطلوب", UrgentCoralSoft, UrgentCoral)
+                            Triple(s.kycNotSubmitted, UrgentCoralSoft, UrgentCoral)
                     }
                     DrawerNavItem(
-                        label = "التحقق من الهوية",
+                        label = s.navVerification,
                         icon = Icons.Rounded.VerifiedUser,
                         selected = currentRoute == "verification",
                         badgeText = badgeLabel,
@@ -251,16 +263,24 @@ fun HirafiDrawerContent(
                     )
                 }
                 DrawerNavItem(
-                    label = "الأمان والطوارئ",
+                    label = s.navSafety,
                     icon = Icons.Rounded.Shield,
                     selected = currentRoute == "safety",
                     onClick = { onNavigate("safety") }
                 )
                 DrawerNavItem(
-                    label = "المدينة: ${session.city}",
+                    label = "${s.navCityPrefix} ${session.city}",
                     icon = Icons.Rounded.LocationCity,
                     selected = false,
                     onClick = onCityClick
+                )
+                DrawerNavItem(
+                    label = "${s.navLanguagePrefix} ${appLanguage.nativeLabel}",
+                    icon = Icons.Rounded.Language,
+                    selected = false,
+                    badgeText = appLanguage.shortCode,
+                    onClick = onLanguageClick,
+                    testTag = "drawer_language_item"
                 )
             }
 
@@ -269,9 +289,11 @@ fun HirafiDrawerContent(
                 HorizontalDivider()
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = ObsidianBlack,
+                    color = WepeSoftCard,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .border(1.dp, WepeEmerald.copy(alpha = 0.3f), RoundedCornerShape(18.dp))
                         .testTag("locked_account_role_badge")
                 ) {
                     Row(
@@ -282,28 +304,28 @@ fun HirafiDrawerContent(
                         Icon(
                             imageVector = Icons.Rounded.Lock,
                             contentDescription = null,
-                            tint = ElectricLime,
+                            tint = WepeEmerald,
                             modifier = Modifier.size(20.dp)
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = when (session.role) {
-                                    UserRole.ADMIN -> "حساب أدمين رسمي"
-                                    UserRole.CRAFTSMAN -> "حساب حرفي دائم (${HirafiCategories.byId(session.craftsmanSpecialtyId).nameAr})"
-                                    UserRole.CLIENT -> "حساب زبون دائم"
+                                    UserRole.ADMIN -> s.roleBadgeAdminTitle
+                                    UserRole.CRAFTSMAN -> "${s.roleCraftsman} (${HirafiCategories.byId(session.craftsmanSpecialtyId).localizedName(s)})"
+                                    UserRole.CLIENT -> s.roleClient
                                 },
-                                color = ElectricLime,
+                                color = WepeEmeraldDark,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
                             Text(
                                 text = when {
-                                    session.isSuspended -> "الحساب معلّق مؤقتاً من الإدارة"
-                                    session.role == UserRole.ADMIN -> "صلاحيات كاملة — إدارة المنصة والتوثيق"
-                                    session.role == UserRole.CRAFTSMAN -> "حساب مقفل — مخصص لوضع الحرفي فقط"
-                                    else -> "حساب مقفل — مخصص لوضع الزبون فقط"
+                                    session.isSuspended -> s.accountSuspendedMsg
+                                    session.role == UserRole.ADMIN -> s.roleBadgeAdminDesc
+                                    session.role == UserRole.CRAFTSMAN -> s.roleBadgeCraftsmanDesc
+                                    else -> s.roleBadgeClientDesc
                                 },
-                                color = if (session.isSuspended) UrgentCoral else Color(0xFFB5BFC9),
+                                color = if (session.isSuspended) UrgentCoral else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 11.sp
                             )
                         }
@@ -316,6 +338,7 @@ fun HirafiDrawerContent(
                         color = VerifiedEmeraldSoft,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .border(1.dp, VerifiedEmerald.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
                             .testTag("supabase_connected_status_pill")
                     ) {
                         Row(
@@ -323,14 +346,9 @@ fun HirafiDrawerContent(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.CloudDone,
-                                contentDescription = null,
-                                tint = VerifiedEmerald,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            LivePulseDot(color = VerifiedEmerald, dotSize = 7.dp)
                             Text(
-                                text = "متصل",
+                                text = s.connected,
                                 color = VerifiedEmerald,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
@@ -362,7 +380,7 @@ fun HirafiDrawerContent(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "تسجيل الخروج من الحساب",
+                        text = s.logoutAction,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
@@ -383,12 +401,12 @@ fun HirafiDrawerContent(
             },
             title = {
                 Text(
-                    text = "تسجيل الخروج",
+                    text = s.logoutTitle,
                     fontWeight = FontWeight.ExtraBold
                 )
             },
             text = {
-                Text("هل أنت متأكد أنك تريد تسجيل الخروج من الحساب الحالي؟ ستتم العودة إلى شاشة تسجيل الحساب.")
+                Text(s.logoutMessage)
             },
             confirmButton = {
                 Button(
@@ -402,7 +420,7 @@ fun HirafiDrawerContent(
                     ),
                     modifier = Modifier.testTag("confirm_logout_button")
                 ) {
-                    Text("خروج", fontWeight = FontWeight.Bold)
+                    Text(s.logoutConfirm, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -410,7 +428,7 @@ fun HirafiDrawerContent(
                     onClick = { showLogoutDialog = false },
                     modifier = Modifier.testTag("cancel_logout_button")
                 ) {
-                    Text("إلغاء")
+                    Text(s.cancel)
                 }
             }
         )
@@ -424,8 +442,8 @@ private fun DrawerNavItem(
     selected: Boolean,
     onClick: () -> Unit,
     badgeText: String? = null,
-    badgeContainerColor: Color = ElectricLimeSoft,
-    badgeTextColor: Color = ObsidianBlack,
+    badgeContainerColor: Color = WepeEmeraldSoft,
+    badgeTextColor: Color = WepeEmeraldDark,
     testTag: String? = null
 ) {
     NavigationDrawerItem(
@@ -450,9 +468,9 @@ private fun DrawerNavItem(
         selected = selected,
         onClick = onClick,
         colors = NavigationDrawerItemDefaults.colors(
-            selectedContainerColor = ElectricLime.copy(alpha = 0.35f),
-            selectedIconColor = ObsidianBlack,
-            selectedTextColor = ObsidianBlack
+            selectedContainerColor = WepeEmeraldSoft,
+            selectedIconColor = WepeEmeraldDark,
+            selectedTextColor = WepeEmeraldDark
         ),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier

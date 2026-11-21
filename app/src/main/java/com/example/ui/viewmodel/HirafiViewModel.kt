@@ -34,11 +34,15 @@ import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
 import com.example.data.model.VerificationSubmission
+import com.example.data.remote.GoogleIdTokenFallbackToBrowserException
 import com.example.data.remote.MapRoutingService
 import com.example.data.remote.SupabaseAuthState
 import com.example.data.remote.SupabaseConfig
 import com.example.data.repository.HirafiRepository
 import com.example.notifications.HirafiNotificationHelper
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.HirafiI18n
+import com.example.ui.i18n.localizedLabel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -100,6 +104,12 @@ class HirafiViewModel(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
         initialValue = UserSession()
+    )
+
+    val appLanguage: StateFlow<AppLanguage> = repository.appLanguage.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000L),
+        initialValue = AppLanguage.ARABIC
     )
 
     val allRequests: StateFlow<List<ServiceRequest>> = repository.observeRequests().stateIn(
@@ -202,6 +212,9 @@ class HirafiViewModel(
     private val _activeChatRequestId = MutableStateFlow<String?>(null)
     val activeChatRequestId: StateFlow<String?> = _activeChatRequestId.asStateFlow()
 
+    private val _unreadChatCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadChatCounts: StateFlow<Map<String, Int>> = _unreadChatCounts.asStateFlow()
+
     private val _authUiState = MutableStateFlow(AuthUiState())
     val authUiState: StateFlow<AuthUiState> = _authUiState.asStateFlow()
 
@@ -294,7 +307,11 @@ class HirafiViewModel(
         userSession
     ) { requests, explicitId, session ->
         if (explicitId != null) {
-            requests.firstOrNull { it.id == explicitId }
+            requests.firstOrNull {
+                it.id == explicitId &&
+                    it.status != RequestStatus.COMPLETED &&
+                    it.status != RequestStatus.CANCELLED
+            }
         } else {
             requests.firstOrNull {
                 it.clientId == session.userId &&
@@ -411,7 +428,11 @@ class HirafiViewModel(
                     }
                 } else {
                     if (explicitId != null) {
-                        requests.firstOrNull { it.id == explicitId }
+                        requests.firstOrNull {
+                            it.id == explicitId &&
+                                it.status != RequestStatus.COMPLETED &&
+                                it.status != RequestStatus.CANCELLED
+                        }
                     } else {
                         requests.firstOrNull {
                             it.clientId == session.userId &&
@@ -426,18 +447,7 @@ class HirafiViewModel(
                     req.status == RequestStatus.CANCELLED ||
                     req.status == RequestStatus.COMPLETED
                 ) {
-                    activeTrackedRequestKey = null
-                    trackingJob?.cancel()
-                    locationService?.stopForegroundJobTracking()
-                    _liveRoute.value = LiveRouteState()
-                    _trackingState.update {
-                        it.copy(
-                            isTracking = false,
-                            isForegroundServiceActive = false,
-                            trackedRequestId = null,
-                            hasLocationPermission = locationService?.hasLocationPermission() == true
-                        )
-                    }
+                    stopActiveTrackingState()
                 } else {
                     val key = "${req.id}_${req.assignedCraftsmanId}_${req.status.dbValue}"
                     if (activeTrackedRequestKey != key) {
@@ -446,6 +456,67 @@ class HirafiViewModel(
                     }
                 }
             }
+        }
+        viewModelScope.launch {
+            combine(allRequests, _activeClientRequestId, userSession) { requests, explicitId, session ->
+                val id = explicitId ?: return@combine null
+                val target = requests.firstOrNull { it.id == id } ?: return@combine null
+                Triple(id, target.status, session.role)
+            }.distinctUntilChanged().collect { state ->
+                val (id, status, role) = state ?: return@collect
+                if (status == RequestStatus.CANCELLED || status == RequestStatus.COMPLETED) {
+                    if (_activeClientRequestId.value == id) {
+                        _activeClientRequestId.value = null
+                        if (status == RequestStatus.CANCELLED && role == UserRole.CLIENT) {
+                            showMessage("تم إلغاء الخدمة")
+                        }
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            var trackedCraftsmanJobId: String? = null
+            combine(allRequests, userSession) { requests, session ->
+                requests to session
+            }.collect { (requests, session) ->
+                if (session.role != UserRole.CRAFTSMAN) {
+                    trackedCraftsmanJobId = null
+                    return@collect
+                }
+                val currentActive = requests.firstOrNull {
+                    it.assignedCraftsmanId == session.userId &&
+                        it.status != RequestStatus.COMPLETED &&
+                        it.status != RequestStatus.CANCELLED
+                }
+                if (currentActive != null) {
+                    trackedCraftsmanJobId = currentActive.id
+                } else {
+                    val prevId = trackedCraftsmanJobId
+                    if (prevId != null) {
+                        val prevReq = requests.firstOrNull { it.id == prevId }
+                        if (prevReq?.status == RequestStatus.CANCELLED) {
+                            showMessage("تم إلغاء الخدمة من طرف الزبون")
+                        }
+                        trackedCraftsmanJobId = null
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopActiveTrackingState() {
+        activeTrackedRequestKey = null
+        trackingJob?.cancel()
+        trackingJob = null
+        locationService?.stopForegroundJobTracking()
+        _liveRoute.value = LiveRouteState()
+        _trackingState.update {
+            it.copy(
+                isTracking = false,
+                isForegroundServiceActive = false,
+                trackedRequestId = null,
+                hasLocationPermission = locationService?.hasLocationPermission() == true
+            )
         }
     }
 
@@ -630,18 +701,15 @@ class HirafiViewModel(
         }
 
         // Continuously collect Play Services real-time updates (from direct callbackFlow & LiveLocationBus)
-        val liveFlow = if (svc != null) {
-            merge(
-                svc.observeRealTimeLocation(intervalMillis = 3500L, minDistanceMeters = 5f),
-                LiveLocationBus.latestCraftsmanFix.let { busFlow ->
-                    kotlinx.coroutines.flow.flow {
-                        busFlow.collect { snap -> if (snap != null) emit(snap) }
-                    }
+        val nonNullSvc = svc ?: return
+        val liveFlow = merge(
+            nonNullSvc.observeRealTimeLocation(intervalMillis = 3500L, minDistanceMeters = 5f),
+            LiveLocationBus.latestCraftsmanFix.let { busFlow ->
+                kotlinx.coroutines.flow.flow {
+                    busFlow.collect { snap -> if (snap != null) emit(snap) }
                 }
-            )
-        } else {
-            return
-        }
+            }
+        )
 
         liveFlow.collect { fix ->
             applyCraftsmanFix(fix)
@@ -818,6 +886,28 @@ class HirafiViewModel(
         _draft.update { it.copy(photoUri = uri) }
     }
 
+    fun prefillDraftFromRequest(request: ServiceRequest) {
+        _draft.update {
+            it.copy(
+                selectedCategoryId = request.categoryId,
+                title = request.title,
+                description = request.description,
+                proposedPrice = (request.acceptedPrice ?: request.proposedPrice).coerceIn(40, 5000),
+                paymentMethod = request.paymentMethod,
+                isUrgent = request.isUrgent,
+                addressLabel = request.addressLabel,
+                lat = request.lat,
+                lng = request.lng,
+                isGpsActive = false,
+                isResolvingAddress = false
+            )
+        }
+        _cameraTarget.value = request.lat to request.lng
+        lastCraftsmenCenter = request.lat to request.lng
+        _nearbyCraftsmen.value = repository.getCraftsmenAround(request.lat, request.lng)
+        showMessage("تم تجهيز مسودة الطلب السابق بنجاح")
+    }
+
     fun onMapPinMoved(context: Context, lat: Double, lng: Double, moveCamera: Boolean = false) {
         if (moveCamera) {
             _cameraTarget.value = lat to lng
@@ -838,7 +928,7 @@ class HirafiViewModel(
                 lastCraftsmenCenter = lat to lng
                 _nearbyCraftsmen.value = repository.getCraftsmenAround(lat, lng)
             }
-            val resolved = MapRoutingService.reverseGeocode(context, lat, lng)
+            val resolved = MapRoutingService.reverseGeocode(context, lat, lng, appLanguage.value.code)
             _draft.update {
                 it.copy(
                     addressLabel = resolved,
@@ -867,7 +957,7 @@ class HirafiViewModel(
     fun searchPlaces(context: Context, query: String) {
         viewModelScope.launch {
             _isSearchingPlaces.value = true
-            _placeSearchResults.value = MapRoutingService.searchPlaces(context, query)
+            _placeSearchResults.value = MapRoutingService.searchPlaces(context, query, appLanguage.value.code)
             _isSearchingPlaces.value = false
         }
     }
@@ -926,7 +1016,7 @@ class HirafiViewModel(
                 }
                 geocodeJob?.cancel()
                 geocodeJob = viewModelScope.launch {
-                    val address = MapRoutingService.reverseGeocode(appContext, lat, lng)
+                    val address = MapRoutingService.reverseGeocode(appContext, lat, lng, appLanguage.value.code)
                     _draft.update {
                         it.copy(
                             addressLabel = address,
@@ -1090,16 +1180,32 @@ class HirafiViewModel(
         }
     }
 
-    fun cancelActiveRequest() {
-        val req = activeClientRequest.value ?: return
+    fun cancelActiveRequest(requestId: String? = null) {
+        val targetId = requestId ?: activeClientRequest.value?.id ?: return
         viewModelScope.launch {
             runCatching {
-                repository.cancelRequest(req.id)
+                repository.cancelRequest(targetId)
             }.onSuccess {
-                _activeClientRequestId.value = null
-                showMessage("تم إلغاء الطلب")
+                if (_activeClientRequestId.value == targetId) {
+                    _activeClientRequestId.value = null
+                }
+                stopActiveTrackingState()
+                showMessage("تم إلغاء الخدمة وإغلاق الطلب")
             }.onFailure { err ->
-                showMessage(err.message ?: "تعذر إلغاء الطلب")
+                showMessage(err.message ?: "تعذر إلغاء الخدمة")
+            }
+        }
+    }
+
+    fun cancelCraftsmanActiveJob(request: ServiceRequest) {
+        viewModelScope.launch {
+            runCatching {
+                repository.cancelRequest(request.id)
+            }.onSuccess {
+                stopActiveTrackingState()
+                showMessage("تم إلغاء الخدمة وإشعار الزبون")
+            }.onFailure { err ->
+                showMessage(err.message ?: "تعذر إلغاء الخدمة")
             }
         }
     }
@@ -1183,6 +1289,11 @@ class HirafiViewModel(
 
     fun openChatForRequest(requestId: String) {
         _activeChatRequestId.value = requestId
+        _unreadChatCounts.update { it - requestId }
+    }
+
+    fun closeActiveChat() {
+        _activeChatRequestId.value = null
     }
 
     fun sendChatMessage(requestId: String, text: String) {
@@ -1223,6 +1334,31 @@ class HirafiViewModel(
         }
     }
 
+    fun handleSupabaseOAuthCallback(uriString: String) {
+        viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
+            val result = repository.completeGoogleOAuthCallback(uriString)
+            result.onSuccess { restored ->
+                _authUiState.value = AuthUiState(isLoading = false)
+                if (restored != null) {
+                    val coord = MoroccanLocations.coordForCity(restored.city)
+                    selectNeighborhood(restored.city, coord.lat, coord.lng)
+                    when (restored.role) {
+                        UserRole.ADMIN -> showMessage("مرحباً ${restored.fullName}! تم تسجيل دخولك كأدمين رسمي للمنصة ✓")
+                        UserRole.CRAFTSMAN -> showMessage("مرحباً بعودتك ${restored.fullName} (${HirafiCategories.byId(restored.craftsmanSpecialtyId).nameAr})")
+                        UserRole.CLIENT -> showMessage("مرحباً بعودتك ${restored.fullName}!")
+                    }
+                } else {
+                    showMessage("تم التحقق من حساب غوغل — اختر نوع الحساب والمدينة للتأكيد")
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: "تعذر إتمام تسجيل الدخول عبر غوغل"
+                _authUiState.value = AuthUiState(isLoading = false, message = msg, isError = true)
+                showMessage(msg)
+            }
+        }
+    }
+
     fun completeGoogleSignIn(
         idToken: String,
         displayName: String,
@@ -1230,7 +1366,8 @@ class HirafiViewModel(
         email: String,
         city: String,
         preferredRole: UserRole,
-        preferredSpecialtyId: String?
+        preferredSpecialtyId: String?,
+        onFallbackToBrowser: () -> Unit = {}
     ) {
         viewModelScope.launch {
             _authUiState.value = AuthUiState(isLoading = true)
@@ -1243,6 +1380,13 @@ class HirafiViewModel(
                 preferredRole = preferredRole,
                 preferredSpecialtyId = preferredSpecialtyId
             )
+            val err = result.exceptionOrNull()
+            if (err is GoogleIdTokenFallbackToBrowserException && idToken.isNotBlank() && SupabaseConfig.isConfigured) {
+                _authUiState.value = AuthUiState(isLoading = false)
+                showMessage("جاري التحويل لإكمال تسجيل الدخول عبر متصفح غوغل...")
+                onFallbackToBrowser()
+                return@launch
+            }
             handleAuthResult(result, preferredRole)
         }
     }
@@ -1302,6 +1446,40 @@ class HirafiViewModel(
                 _authUiState.value = AuthUiState(isLoading = false, message = err.message, isError = true)
                 showMessage(err.message ?: "تعذر تسجيل الدخول في Supabase")
             }
+        }
+    }
+
+    fun clearAuthMessage() {
+        _authUiState.update { it.copy(message = null, isError = false) }
+    }
+
+    fun sendPasswordReset(email: String) {
+        val clean = email.trim().lowercase()
+        val s = HirafiI18n.forLanguage(appLanguage.value)
+        if (!LoginValidator.isValidEmail(clean)) {
+            showMessage(s.authEmailRequiredError)
+            return
+        }
+        viewModelScope.launch {
+            _authUiState.value = AuthUiState(isLoading = true)
+            repository.sendPasswordResetEmail(clean).onSuccess {
+                _authUiState.value = AuthUiState(
+                    isLoading = false,
+                    message = s.authResetEmailSent,
+                    isError = false
+                )
+                showMessage(s.authResetEmailSent)
+            }.onFailure { err ->
+                val msg = err.message ?: "تعذر إرسال رابط الاسترجاع"
+                _authUiState.value = AuthUiState(isLoading = false, message = msg, isError = true)
+                showMessage(msg)
+            }
+        }
+    }
+
+    fun setAppLanguage(language: AppLanguage) {
+        viewModelScope.launch {
+            repository.setAppLanguage(language)
         }
     }
 
@@ -1545,6 +1723,10 @@ class HirafiViewModel(
         }
     }
 
+    fun refreshAdminData() {
+        repository.refreshMarketplaceNow()
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun startSupabaseSync(role: UserRole, specialtyId: String) {
         cloudSyncJob?.cancel()
@@ -1725,33 +1907,94 @@ class HirafiViewModel(
 
             if (role != UserRole.ADMIN) {
                 launch {
-                    val myUid = supabaseAuthState.value?.uid
+                    val myUid = supabaseAuthState.value?.uid ?: userSession.value.userId
+                    val activeJobChatFlow = combine(
+                        _activeChatRequestId,
+                        allRequests,
+                        userSession
+                    ) { openChatId, requests, sess ->
+                        if (!openChatId.isNullOrBlank()) {
+                            openChatId
+                        } else if (sess.role == UserRole.CRAFTSMAN) {
+                            requests.firstOrNull {
+                                it.assignedCraftsmanId == sess.userId &&
+                                    it.status != RequestStatus.COMPLETED &&
+                                    it.status != RequestStatus.CANCELLED &&
+                                    it.status != RequestStatus.SEARCHING
+                            }?.id
+                        } else {
+                            requests.firstOrNull {
+                                it.clientId == sess.userId &&
+                                    it.status != RequestStatus.COMPLETED &&
+                                    it.status != RequestStatus.CANCELLED &&
+                                    it.status != RequestStatus.SEARCHING
+                            }?.id
+                        }
+                    }.distinctUntilChanged()
+
                     var msgBaselineReady = false
                     val seenMsgIds = mutableSetOf<String>()
-                    _activeChatRequestId
+                    activeJobChatFlow
                         .flatMapLatest { reqId ->
                             msgBaselineReady = false
                             seenMsgIds.clear()
                             if (reqId.isNullOrBlank()) emptyFlow()
-                            else repository.observeCloudMessagesForRequest(reqId)
+                            else repository.observeCloudMessagesForRequest(reqId).map { reqId to it }
                         }
-                        .collect { messages ->
+                        .collect { (reqId, messages) ->
                             repository.cacheRemoteMessages(messages)
                             if (!msgBaselineReady) {
                                 seenMsgIds.addAll(messages.map { it.id })
                                 msgBaselineReady = true
                             } else {
-                                messages.filter { it.id !in seenMsgIds && it.senderId != myUid }.forEach { msg ->
-                                    seenMsgIds.add(msg.id)
+                                val newIncoming = messages.filter { it.id !in seenMsgIds && it.senderId != myUid }
+                                if (newIncoming.isNotEmpty()) {
+                                    seenMsgIds.addAll(newIncoming.map { it.id })
+                                    if (_activeChatRequestId.value != reqId) {
+                                        _unreadChatCounts.update { map ->
+                                            map + (reqId to ((map[reqId] ?: 0) + newIncoming.size))
+                                        }
+                                    }
+                                    val latest = newIncoming.last()
+                                    val strings = HirafiI18n.forLanguage(appLanguage.value)
                                     postSystemNotification(
                                         channelId = HirafiNotificationHelper.CHANNEL_MESSAGES,
-                                        notifId = msg.id.hashCode(),
-                                        title = "رسالة من ${msg.senderName}",
-                                        body = msg.text
+                                        notifId = latest.id.hashCode(),
+                                        title = "${strings.chatHeaderTitle}: ${latest.senderName}",
+                                        body = latest.text,
+                                        targetRoute = "chat/$reqId"
                                     )
                                 }
                             }
                         }
+                }
+
+                // Notify client/craftsman on active request status changes
+                launch {
+                    val lastStatuses = mutableMapOf<String, RequestStatus>()
+                    var baselineStatusesReady = false
+                    allRequests.collect { list ->
+                        val myUid = userSession.value.userId
+                        val mine = list.filter { it.clientId == myUid || it.assignedCraftsmanId == myUid }
+                        if (!baselineStatusesReady) {
+                            mine.forEach { lastStatuses[it.id] = it.status }
+                            baselineStatusesReady = true
+                        } else {
+                            val strings = HirafiI18n.forLanguage(appLanguage.value)
+                            mine.forEach { req ->
+                                val prev = lastStatuses[req.id]
+                                lastStatuses[req.id] = req.status
+                                if (prev != null && prev != req.status && req.status != RequestStatus.SEARCHING) {
+                                    postSystemNotification(
+                                        channelId = HirafiNotificationHelper.CHANNEL_ORDERS,
+                                        notifId = ("status_${req.id}").hashCode(),
+                                        title = req.title,
+                                        body = req.status.localizedLabel(strings)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1761,7 +2004,8 @@ class HirafiViewModel(
         channelId: String,
         notifId: Int,
         title: String,
-        body: String
+        body: String,
+        targetRoute: String? = null
     ) {
         val ctx = appContext ?: return
         HirafiNotificationHelper.showNotification(
@@ -1769,7 +2013,8 @@ class HirafiViewModel(
             channelId = channelId,
             notificationId = notifId,
             title = title,
-            body = body
+            body = body,
+            targetRoute = targetRoute
         )
     }
 
@@ -1792,6 +2037,7 @@ class HirafiViewModel(
         repository.clearRequestsSyncError()
         _activeClientRequestId.value = null
         _activeChatRequestId.value = null
+        _unreadChatCounts.value = emptyMap()
         _pendingReviewRequest.value = null
         _userGpsLocation.value = null
         lastCraftsmenCenter = null

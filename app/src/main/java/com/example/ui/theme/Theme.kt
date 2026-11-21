@@ -11,10 +11,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 private val HirafiDarkColorScheme = darkColorScheme(
-    primary = ElectricLime,
-    onPrimary = ObsidianBlack,
+    primary = WepeEmerald,
+    onPrimary = Color.White,
     primaryContainer = ElectricLimeDarkContainer,
-    onPrimaryContainer = ElectricLime,
+    onPrimaryContainer = WepeEmeraldSoft,
     secondary = VerifiedEmerald,
     onSecondary = Color.White,
     secondaryContainer = Color(0xFF0A3823),
@@ -33,37 +33,37 @@ private val HirafiDarkColorScheme = darkColorScheme(
 )
 
 private val HirafiLightColorScheme = lightColorScheme(
-    primary = ElectricLime,
-    onPrimary = ObsidianBlack,
-    primaryContainer = ElectricLimeSoft,
-    onPrimaryContainer = ObsidianBlack,
+    primary = WepeEmerald,
+    onPrimary = Color.White,
+    primaryContainer = WepeEmeraldSoft,
+    onPrimaryContainer = WepeEmeraldDark,
     secondary = ObsidianBlack,
     onSecondary = Color.White,
-    secondaryContainer = LightSurfaceVariant,
+    secondaryContainer = WepeSoftCard,
     onSecondaryContainer = TextPrimaryLight,
-    tertiary = VerifiedEmerald,
+    tertiary = WepeEmerald,
     onTertiary = Color.White,
     background = LightBackground,
     onBackground = TextPrimaryLight,
     surface = LightSurface,
     onSurface = TextPrimaryLight,
-    surfaceVariant = LightSurfaceVariant,
+    surfaceVariant = WepeSoftCard,
     onSurfaceVariant = TextSecondaryLight,
-    outline = LightOutline,
+    outline = WepeHairline,
     error = UrgentCoral,
     onError = Color.White
 )
 
 val HirafiShapes = Shapes(
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(16.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(18.dp),
     large = RoundedCornerShape(24.dp),
     extraLarge = RoundedCornerShape(28.dp)
 )
 
 @Composable
 fun HirafiTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) HirafiDarkColorScheme else HirafiLightColorScheme

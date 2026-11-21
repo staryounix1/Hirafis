@@ -13,6 +13,7 @@ import com.example.data.model.HirafiCategories
 import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.UserRole
 import com.example.data.model.UserSession
+import com.example.ui.i18n.AppLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -50,6 +51,11 @@ class UserPreferencesDataStore(private val context: Context) {
         val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
         val SUPABASE_REFRESH_TOKEN = stringPreferencesKey("supabase_refresh_token")
         val SUPABASE_EXPIRES_AT = longPreferencesKey("supabase_expires_at")
+        val APP_LANGUAGE = stringPreferencesKey("app_language")
+    }
+
+    val appLanguageFlow: Flow<AppLanguage> = context.dataStore.data.map { prefs ->
+        AppLanguage.fromCode(prefs[Keys.APP_LANGUAGE])
     }
 
     val userSessionFlow: Flow<UserSession> = context.dataStore.data.map { prefs ->
@@ -277,9 +283,19 @@ class UserPreferencesDataStore(private val context: Context) {
         }
     }
 
+    suspend fun setAppLanguage(language: AppLanguage) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.APP_LANGUAGE] = language.code
+        }
+    }
+
     suspend fun logoutAccount() {
         context.dataStore.edit { prefs ->
+            val savedLang = prefs[Keys.APP_LANGUAGE]
             prefs.clear()
+            if (!savedLang.isNullOrBlank()) {
+                prefs[Keys.APP_LANGUAGE] = savedLang
+            }
         }
     }
 }

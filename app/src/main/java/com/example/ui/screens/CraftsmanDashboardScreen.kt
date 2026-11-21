@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -51,10 +53,15 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +70,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -94,15 +102,29 @@ import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
 import com.example.data.remote.MapRoutingService
 import com.example.ui.components.CraftsmanHandshakePinVerifier
+import com.example.ui.components.CraftsmanRequestFilter
+import com.example.ui.components.HirafiProAnalytics
 import com.example.ui.components.HirafiRealMap
+import com.example.ui.components.JobMilestoneTimeline
+import com.example.ui.components.LivePulseDot
+import com.example.ui.components.ObsidianHeroBrush
 import com.example.ui.components.RealtimeBiddingBottomSheet
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
 import com.example.ui.theme.ObsidianBlack
+import com.example.ui.theme.SlateBorder
+import com.example.ui.theme.StarAmber
 import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.VoltGlowAccent
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
 import com.example.ui.viewmodel.HirafiViewModel
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 
@@ -114,6 +136,8 @@ fun CraftsmanDashboardScreen(
     onOpenChat: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val s = hirafiStrings()
+    val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
     val session by viewModel.userSession.collectAsStateWithLifecycle()
     val allRequests by viewModel.allRequests.collectAsStateWithLifecycle()
     val openRequests by viewModel.craftsmanOpenRequests.collectAsStateWithLifecycle()
@@ -123,10 +147,13 @@ fun CraftsmanDashboardScreen(
     val trackingState by viewModel.trackingState.collectAsStateWithLifecycle()
     val cloudSyncError by viewModel.cloudRequestsSyncError.collectAsStateWithLifecycle()
     val craftsmanOffersByRequest by viewModel.craftsmanSubmittedOffers.collectAsStateWithLifecycle()
+    val unreadChatCounts by viewModel.unreadChatCounts.collectAsStateWithLifecycle()
+    val nowMillis by viewModel.tickerMillis.collectAsStateWithLifecycle()
 
     var isMapMode by remember { mutableStateOf(false) }
     var selectedMapRequest by remember { mutableStateOf<ServiceRequest?>(null) }
     var customBidTarget by remember { mutableStateOf<ServiceRequest?>(null) }
+    var selectedRequestFilter by rememberSaveable { mutableStateOf(CraftsmanRequestFilter.ALL) }
 
     val craftsmanLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -184,10 +211,11 @@ fun CraftsmanDashboardScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Authentic inDrive Driver Header
-        Surface(
-            color = ObsidianBlack,
-            modifier = Modifier.fillMaxWidth()
+        // Authentic inDrive Driver Header with Obsidian Gradient Depth
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(ObsidianHeroBrush)
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 Row(
@@ -204,28 +232,33 @@ fun CraftsmanDashboardScreen(
                         Icon(Icons.Rounded.Menu, contentDescription = "القائمة", tint = Color.White)
                     }
 
-                    // Iconic inDrive Driver Online/Offline Pill
+                    // Iconic Online/Offline Emerald Pill
                     Surface(
-                        color = if (session.isCraftsmanOnline) ElectricLime else Color(0xFF262A31),
-                        shape = RoundedCornerShape(24.dp)
+                        color = if (session.isCraftsmanOnline) WepeEmerald else Color(0xFF262A31),
+                        shape = RoundedCornerShape(99.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 2.dp, bottom = 2.dp)
+                            modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp)
                         ) {
+                            if (session.isCraftsmanOnline) {
+                                LivePulseDot(color = Color.White, dotSize = 6.dp)
+                                Spacer(Modifier.width(5.dp))
+                            }
                             Text(
-                                text = if (session.isCraftsmanOnline) "متاح • أستقبل الطلبات" else "غير متصل",
-                                color = if (session.isCraftsmanOnline) ObsidianBlack else Color.White,
+                                text = if (session.isCraftsmanOnline) s.craftsmanOnline else s.craftsmanOffline,
+                                color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 12.sp,
+                                maxLines = 1
                             )
                             Spacer(Modifier.width(8.dp))
                             Switch(
                                 checked = session.isCraftsmanOnline,
                                 onCheckedChange = { viewModel.toggleCraftsmanOnline(it) },
                                 colors = SwitchDefaults.colors(
-                                    checkedThumbColor = ObsidianBlack,
-                                    checkedTrackColor = Color.White.copy(alpha = 0.65f),
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color.White.copy(alpha = 0.35f),
                                     uncheckedThumbColor = Color.White,
                                     uncheckedTrackColor = Color(0xFF3E444F)
                                 ),
@@ -236,16 +269,16 @@ fun CraftsmanDashboardScreen(
 
                     Surface(
                         color = Color(0xFF262A31),
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(99.dp),
                         modifier = Modifier.testTag("craftsman_locked_mode_badge")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
-                            Icon(Icons.Rounded.Lock, contentDescription = "حساب حرفي", tint = ElectricLime, modifier = Modifier.size(15.dp))
+                            Icon(Icons.Rounded.Lock, contentDescription = s.roleCraftsman, tint = VoltGlowAccent, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("حرفي", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(s.roleCraftsman, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -257,18 +290,22 @@ fun CraftsmanDashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     DriverStatCard(
-                        title = "أرباحك اليوم",
-                        value = "$totalEarningsDh د.م",
+                        title = when (s.language) {
+                            AppLanguage.ARABIC -> "أرباحك اليوم"
+                            AppLanguage.FRENCH -> "Gains du jour"
+                            AppLanguage.ENGLISH -> "Today's Earnings"
+                        },
+                        value = "$totalEarningsDh ${s.currencyDh}",
                         modifier = Modifier.weight(1f)
                     )
                     DriverStatCard(
-                        title = "طلبات مهنتك",
+                        title = s.craftsmanOpenRequestsTitle,
                         value = "${openRequests.size}",
                         modifier = Modifier.weight(0.9f)
                     )
                     DriverStatCard(
-                        title = if (session.isCraftsmanSpecialtyLocked) "مهنتك المعتمدة 🔒" else "المهنة",
-                        value = if (session.isCraftsmanSpecialtyLocked) lockedCategory.nameAr else "غير محددة",
+                        title = s.authChooseSpecialty,
+                        value = if (session.isCraftsmanSpecialtyLocked) lockedCategory.localizedName(s) else "—",
                         modifier = Modifier.weight(1.25f)
                     )
                 }
@@ -322,22 +359,19 @@ fun CraftsmanDashboardScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "مهنتك: ${lockedCategory.nameAr}",
+                                    text = "${lockedCategory.localizedName(s)} 🔒",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Rounded.Lock,
-                                    contentDescription = "مهنة واحدة مقفلة",
-                                    tint = VerifiedEmerald,
-                                    modifier = Modifier.size(14.dp)
-                                )
                             }
                             Text(
-                                text = "تظهر طلبات ${lockedCategory.nameAr} فقط • خصوصية العروض مفعّلة",
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> "تظهر طلبات ${lockedCategory.localizedName(s)} فقط"
+                                    AppLanguage.FRENCH -> "Demandes ${lockedCategory.localizedName(s)} uniquement"
+                                    AppLanguage.ENGLISH -> "Showing ${lockedCategory.localizedName(s)} requests only"
+                                },
                                 fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -359,7 +393,7 @@ fun CraftsmanDashboardScreen(
                     IconButton(
                         onClick = {
                             viewModel.refreshCraftsmanRequests()
-                            viewModel.showMessage("تم تحديث قائمة الطلبات")
+                            viewModel.showMessage(s.refresh)
                         },
                         modifier = Modifier
                             .size(48.dp)
@@ -367,7 +401,7 @@ fun CraftsmanDashboardScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "تحديث الطلبات",
+                            contentDescription = s.refresh,
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -376,26 +410,31 @@ fun CraftsmanDashboardScreen(
                 Spacer(Modifier.width(8.dp))
 
                 Surface(
-                    color = ObsidianBlack,
-                    shape = RoundedCornerShape(16.dp),
+                    color = WepeEmerald,
+                    shape = RoundedCornerShape(99.dp),
                     modifier = Modifier
+                        .clip(RoundedCornerShape(99.dp))
                         .clickable { isMapMode = !isMapMode }
                         .testTag("craftsman_map_list_toggle")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
                         Icon(
                             imageVector = if (isMapMode) Icons.AutoMirrored.Rounded.FormatListBulleted else Icons.Rounded.Map,
-                            contentDescription = if (isMapMode) "عرض القائمة" else "عرض الخريطة",
-                            tint = ElectricLime,
+                            contentDescription = if (isMapMode) "List" else "Map",
+                            tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = if (isMapMode) "قائمة" else "خريطة",
-                            color = ElectricLime,
+                            text = when (s.language) {
+                                AppLanguage.ARABIC -> if (isMapMode) "قائمة" else "خريطة"
+                                AppLanguage.FRENCH -> if (isMapMode) "Liste" else "Carte"
+                                AppLanguage.ENGLISH -> if (isMapMode) "List" else "Map"
+                            },
+                            color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -501,6 +540,7 @@ fun CraftsmanDashboardScreen(
                                 InDriveDriverRequestCard(
                                     request = overlayRequest,
                                     distanceKm = distKm,
+                                    nowMillis = nowMillis,
                                     existingOffer = craftsmanOffersByRequest[overlayRequest.id],
                                     onAcceptAtPrice = {
                                         viewModel.craftsmanAcceptAtClientPrice(overlayRequest.id)
@@ -532,6 +572,7 @@ fun CraftsmanDashboardScreen(
                                 request = activeCraftsmanJob,
                                 liveRoute = liveRoute,
                                 trackingState = trackingState,
+                                unreadChatCount = unreadChatCounts[activeCraftsmanJob.id] ?: 0,
                                 onRequestTrackingPermission = {
                                     craftsmanLocationLauncher.launch(
                                         arrayOf(
@@ -553,7 +594,8 @@ fun CraftsmanDashboardScreen(
                                     runCatching { context.startActivity(dial) }
                                 },
                                 onChat = { onOpenChat(activeCraftsmanJob.id) },
-                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
+                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) },
+                                onCancel = { viewModel.cancelCraftsmanActiveJob(activeCraftsmanJob) }
                             )
                         }
                     }
@@ -570,6 +612,7 @@ fun CraftsmanDashboardScreen(
                                 request = activeCraftsmanJob,
                                 liveRoute = liveRoute,
                                 trackingState = trackingState,
+                                unreadChatCount = unreadChatCounts[activeCraftsmanJob.id] ?: 0,
                                 onRequestTrackingPermission = {
                                     craftsmanLocationLauncher.launch(
                                         arrayOf(
@@ -591,7 +634,8 @@ fun CraftsmanDashboardScreen(
                                     runCatching { context.startActivity(dial) }
                                 },
                                 onChat = { onOpenChat(activeCraftsmanJob.id) },
-                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) }
+                                onAdvance = { next -> viewModel.advanceJobStatus(activeCraftsmanJob, next) },
+                                onCancel = { viewModel.cancelCraftsmanActiveJob(activeCraftsmanJob) }
                             )
                         }
                     }
@@ -711,28 +755,83 @@ fun CraftsmanDashboardScreen(
                             }
                         }
                     } else {
-                        items(openRequests, key = { it.id }) { req ->
-                            val distKm = MapRoutingService.haversineKm(
-                                localGpsOrCity.first,
-                                localGpsOrCity.second,
-                                req.lat,
-                                req.lng
-                            )
-                            InDriveDriverRequestCard(
-                                request = req,
-                                distanceKm = distKm,
-                                existingOffer = craftsmanOffersByRequest[req.id],
-                                onAcceptAtPrice = { viewModel.craftsmanAcceptAtClientPrice(req.id) },
-                                onQuickCounter = { delta ->
-                                    viewModel.craftsmanSubmitCounterOffer(
-                                        requestId = req.id,
-                                        offeredPrice = req.proposedPrice + delta,
-                                        etaMinutes = 10,
-                                        note = "عرض سريع من الحرفي"
+                        val filteredOpenRequests = HirafiProAnalytics.filterAndSortOpenRequests(
+                            requests = openRequests,
+                            filter = selectedRequestFilter,
+                            refLat = localGpsOrCity.first,
+                            refLng = localGpsOrCity.second
+                        )
+                        item {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("craftsman_request_filter_bar")
+                            ) {
+                                items(CraftsmanRequestFilter.entries) { filter ->
+                                    FilterChip(
+                                        selected = selectedRequestFilter == filter,
+                                        onClick = { selectedRequestFilter = filter },
+                                        label = {
+                                            Text(
+                                                text = filter.localizedLabel(s),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = WepeEmerald,
+                                            selectedLabelColor = Color.White
+                                        ),
+                                        modifier = Modifier.testTag("craftsman_filter_${filter.name.lowercase()}")
                                     )
-                                },
-                                onCustomBid = { customBidTarget = req }
-                            )
+                                }
+                            }
+                        }
+
+                        if (filteredOpenRequests.isEmpty()) {
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                                ) {
+                                    Text(
+                                        text = "لا توجد طلبات مطابقة لهذا التصنيف حالياً.",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            items(filteredOpenRequests, key = { it.id }) { req ->
+                                val distKm = MapRoutingService.haversineKm(
+                                    localGpsOrCity.first,
+                                    localGpsOrCity.second,
+                                    req.lat,
+                                    req.lng
+                                )
+                                InDriveDriverRequestCard(
+                                    request = req,
+                                    distanceKm = distKm,
+                                    nowMillis = nowMillis,
+                                    existingOffer = craftsmanOffersByRequest[req.id],
+                                    onAcceptAtPrice = { viewModel.craftsmanAcceptAtClientPrice(req.id) },
+                                    onQuickCounter = { delta ->
+                                        viewModel.craftsmanSubmitCounterOffer(
+                                            requestId = req.id,
+                                            offeredPrice = req.proposedPrice + delta,
+                                            etaMinutes = 10,
+                                            note = "عرض سريع من الحرفي"
+                                        )
+                                    },
+                                    onCustomBid = { customBidTarget = req }
+                                )
+                            }
                         }
                     }
                 }
@@ -773,7 +872,7 @@ private fun SingleProfessionSelectionGate(
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Rounded.Lock, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(22.dp))
+                    Icon(Icons.Rounded.Lock, contentDescription = null, tint = VoltGlowAccent, modifier = Modifier.size(22.dp))
                     Text(
                         text = "تحديد مهنة واحدة فقط",
                         color = Color.White,
@@ -794,11 +893,11 @@ private fun SingleProfessionSelectionGate(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                     ) {
-                        Icon(Icons.Rounded.VisibilityOff, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Rounded.VisibilityOff, contentDescription = null, tint = VoltGlowAccent, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "حماية العروض: كل حرفي يرى طلبات مهنته وعروضه الخاصة فقط",
-                            color = ElectricLime,
+                            color = VoltGlowAccent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -810,13 +909,13 @@ private fun SingleProfessionSelectionGate(
         HirafiCategories.all.forEach { cat ->
             val selected = cat.id == pickedId
             Surface(
-                color = if (selected) ElectricLimeSoft else MaterialTheme.colorScheme.surface,
+                color = if (selected) WepeEmeraldSoft else Color.White,
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         width = if (selected) 2.dp else 1.dp,
-                        color = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline,
+                        color = if (selected) WepeEmerald else WepeHairline,
                         shape = RoundedCornerShape(18.dp)
                     )
                     .clickable { pickedId = cat.id }
@@ -841,20 +940,20 @@ private fun SingleProfessionSelectionGate(
                             Text(
                                 text = cat.nameAr,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = ObsidianBlack,
                                 fontSize = 15.sp
                             )
                             Text(
                                 text = "متوسط الأجرة: ${cat.minRecommendedDh} - ${cat.maxRecommendedDh} د.م",
                                 fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = Color(0xFF667085)
                             )
                         }
                     }
                     Icon(
                         imageVector = if (selected) Icons.Rounded.RadioButtonChecked else Icons.Rounded.RadioButtonUnchecked,
                         contentDescription = null,
-                        tint = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline
+                        tint = if (selected) WepeEmerald else MaterialTheme.colorScheme.outline
                     )
                 }
             }
@@ -863,8 +962,8 @@ private fun SingleProfessionSelectionGate(
         val chosen = HirafiCategories.byId(pickedId)
         Button(
             onClick = { onConfirmSingleSpecialty(pickedId) },
-            shape = RoundedCornerShape(18.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+            shape = RoundedCornerShape(99.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp)
@@ -891,7 +990,7 @@ private fun DriverStatCard(title: String, value: String, modifier: Modifier = Mo
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
             Text(title, color = Color(0xFF98A2B3), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(2.dp))
-            Text(value, color = ElectricLime, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(value, color = VoltGlowAccent, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -900,12 +999,34 @@ private fun DriverStatCard(title: String, value: String, modifier: Modifier = Mo
 private fun InDriveDriverRequestCard(
     request: ServiceRequest,
     distanceKm: Double,
+    nowMillis: Long,
     existingOffer: ServiceOffer? = null,
     onAcceptAtPrice: () -> Unit,
     onQuickCounter: (Int) -> Unit,
     onCustomBid: () -> Unit
 ) {
+    val s = hirafiStrings()
     val category = HirafiCategories.byId(request.categoryId)
+    val ageLabel = HirafiProAnalytics.formatRelativeAge(request.createdAtMillis, nowMillis, s.language)
+    val marketDeltaPct = HirafiProAnalytics.marketPriceDeltaPercent(
+        proposedPrice = request.proposedPrice,
+        recommendedMin = category.minRecommendedDh,
+        recommendedMax = category.maxRecommendedDh
+    )
+    val (marketBadgeLabel, marketBadgeBg, marketBadgeFg) = when {
+        marketDeltaPct >= 8 -> Triple("+${marketDeltaPct}%", VerifiedEmeraldSoft, WepeEmeraldDark)
+        marketDeltaPct <= -10 -> Triple("${marketDeltaPct}%", UrgentCoralSoft, UrgentCoral)
+        else -> Triple(
+            when (s.language) {
+                AppLanguage.ARABIC -> "سعر السوق العادل"
+                AppLanguage.FRENCH -> "Prix marché"
+                AppLanguage.ENGLISH -> "Fair Price"
+            },
+            WepeEmeraldSoft,
+            WepeEmeraldDark
+        )
+    }
+
     Card(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -937,18 +1058,29 @@ private fun InDriveDriverRequestCard(
                     }
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text(
-                            text = request.clientName,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleSmall
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = request.clientName,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = "• $ageLabel",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Surface(color = VerifiedEmeraldSoft, shape = RoundedCornerShape(8.dp)) {
                                 Text(
-                                    text = "$distanceKm كم عنك",
+                                    text = "$distanceKm ${s.unitKm}",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = VerifiedEmerald,
@@ -956,7 +1088,7 @@ private fun InDriveDriverRequestCard(
                                 )
                             }
                             Text(
-                                text = request.paymentMethod.labelAr,
+                                text = request.paymentMethod.localizedLabel(s),
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -964,21 +1096,32 @@ private fun InDriveDriverRequestCard(
                     }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "${request.proposedPrice} د.م",
+                        text = "${request.proposedPrice} ${s.currencyDh}",
                         fontSize = 22.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (request.isUrgent) {
-                        Surface(color = UrgentCoralSoft, shape = RoundedCornerShape(8.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = marketBadgeBg, shape = RoundedCornerShape(8.dp)) {
+                            Text(
+                                text = marketBadgeLabel,
+                                color = marketBadgeFg,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Icon(Icons.Rounded.Bolt, contentDescription = null, tint = UrgentCoral, modifier = Modifier.size(12.dp))
-                                Text("عاجل", color = UrgentCoral, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                        if (request.isUrgent) {
+                            Surface(color = UrgentCoralSoft, shape = RoundedCornerShape(8.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Bolt, contentDescription = null, tint = UrgentCoral, modifier = Modifier.size(12.dp))
+                                    Text("عاجل", color = UrgentCoral, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -1038,12 +1181,12 @@ private fun InDriveDriverRequestCard(
                     )
                     OfferStatus.ACCEPTED -> Triple(
                         VerifiedEmeraldSoft,
-                        VerifiedEmerald,
+                        WepeEmeraldDark,
                         "وافق الزبون على عرضك (${existingOffer.offeredPrice} د.م)!"
                     )
                     else -> Triple(
-                        ElectricLimeSoft,
-                        ObsidianBlack,
+                        WepeEmeraldSoft,
+                        WepeEmeraldDark,
                         "تم إرسال عرضك (${existingOffer.offeredPrice} د.م) • بانتظار رد الزبون"
                     )
                 }
@@ -1075,11 +1218,11 @@ private fun InDriveDriverRequestCard(
                 }
             }
 
-            // Signature inDrive Driver Accept Button
+            // Signature Emerald Accept Button
             Button(
                 onClick = onAcceptAtPrice,
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
@@ -1131,28 +1274,36 @@ private fun DriverActiveJobCard(
     request: ServiceRequest,
     liveRoute: LiveRouteState,
     trackingState: LiveTrackingState,
+    unreadChatCount: Int = 0,
     onRequestTrackingPermission: () -> Unit,
     onNavigate: () -> Unit,
     onCall: () -> Unit,
     onChat: () -> Unit,
-    onAdvance: (RequestStatus) -> Unit
+    onAdvance: (RequestStatus) -> Unit,
+    onCancel: () -> Unit
 ) {
+    val s = hirafiStrings()
     val nextAction: Pair<String, RequestStatus>? = when (request.status) {
-        RequestStatus.ACCEPTED -> "أنا في الطريق" to RequestStatus.EN_ROUTE
-        RequestStatus.EN_ROUTE -> "وصلت لموقع الزبون" to RequestStatus.ARRIVED
-        RequestStatus.ARRIVED -> "بدأت العمل" to RequestStatus.IN_PROGRESS
-        RequestStatus.IN_PROGRESS -> "إنهاء وتحصيل ${request.acceptedPrice ?: request.proposedPrice} د.م" to RequestStatus.COMPLETED
+        RequestStatus.ACCEPTED -> s.craftsmanImEnRoute to RequestStatus.EN_ROUTE
+        RequestStatus.EN_ROUTE -> s.craftsmanImArrived to RequestStatus.ARRIVED
+        RequestStatus.ARRIVED -> s.craftsmanVerifyStart to RequestStatus.IN_PROGRESS
+        RequestStatus.IN_PROGRESS -> "${s.craftsmanCompleteJob} (${request.acceptedPrice ?: request.proposedPrice} ${s.currencyDh})" to RequestStatus.COMPLETED
         else -> null
     }
     var isPinVerified by rememberSaveable(request.id) { mutableStateOf(false) }
+    var showCancelConfirmDialog by remember { mutableStateOf(false) }
     val expectedPin = remember(request.id, request.categoryId) {
         JobHandshakeSecurity.deriveSecurityPin(request)
     }
 
     Card(
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = ObsidianBlack),
-        modifier = Modifier.fillMaxWidth()
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(ObsidianHeroBrush)
+            .border(1.dp, WepeEmerald.copy(alpha = 0.45f), RoundedCornerShape(24.dp))
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -1160,26 +1311,28 @@ private fun DriverActiveJobCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(color = ElectricLimeSoft, shape = RoundedCornerShape(10.dp)) {
+                Surface(color = WepeEmeraldSoft, shape = RoundedCornerShape(99.dp)) {
                     Text(
-                        text = "الطلب الجاري: ${request.status.labelAr}",
-                        color = ObsidianBlack,
+                        text = request.status.localizedLabel(s),
+                        color = WepeEmeraldDark,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
                 Text(
-                    text = "${request.acceptedPrice ?: request.proposedPrice} د.م",
-                    color = ElectricLime,
+                    text = "${request.acceptedPrice ?: request.proposedPrice} ${s.currencyDh}",
+                    color = VoltGlowAccent,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 20.sp
                 )
             }
 
+            JobMilestoneTimeline(currentStatus = request.status, isDarkSurface = true)
+
             Text(request.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = VoltGlowAccent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("${request.clientName} • ${request.addressLabel}", color = Color(0xFFB8C0CC), fontSize = 13.sp)
             }
@@ -1190,8 +1343,8 @@ private fun DriverActiveJobCard(
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        text = "المسار المباشر للزبون: ${liveRoute.etaMinutes} دقيقة (${liveRoute.remainingDistanceKm} كم)",
-                        color = ElectricLime,
+                        text = "${s.mapLiveEtaPrefix} ${liveRoute.etaMinutes} ${s.unitMin} (${liveRoute.remainingDistanceKm} ${s.unitKm})",
+                        color = VoltGlowAccent,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
@@ -1208,9 +1361,9 @@ private fun DriverActiveJobCard(
             }
 
             if (trackingState.hasLocationPermission) {
-                val accText = trackingState.latestFix?.accuracyMeters?.takeIf { it > 0f }?.let { " • دقة ${it.toInt()} م" }.orEmpty()
+                val accText = trackingState.latestFix?.accuracyMeters?.takeIf { it > 0f }?.let { " • ±${it.toInt()}m" }.orEmpty()
                 Surface(
-                    color = VerifiedEmerald.copy(alpha = 0.18f),
+                    color = WepeEmerald.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1218,11 +1371,11 @@ private fun DriverActiveJobCard(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Rounded.GpsFixed, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(15.dp))
+                        LivePulseDot(color = VoltGlowAccent, dotSize = 7.dp)
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "خدمة تتبع الموقع GPS المباشر نشطة$accText",
-                            color = VerifiedEmerald,
+                            text = "${s.craftsmanLiveGpsActive}$accText",
+                            color = VoltGlowAccent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -1232,14 +1385,24 @@ private fun DriverActiveJobCard(
                 OutlinedButton(
                     onClick = onRequestTrackingPermission,
                     shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, VoltGlowAccent.copy(alpha = 0.5f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(44.dp)
                         .testTag("enable_craftsman_gps_tracking_button")
                 ) {
-                    Icon(Icons.Rounded.MyLocation, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Rounded.MyLocation, contentDescription = null, tint = VoltGlowAccent, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("تفعيل التتبع المباشر لموقعك (GPS)", color = ElectricLime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = when (s.language) {
+                            AppLanguage.ARABIC -> "تفعيل التتبع المباشر لموقعك (GPS)"
+                            AppLanguage.FRENCH -> "Activer le suivi GPS en direct"
+                            AppLanguage.ENGLISH -> "Enable Live GPS Tracking"
+                        },
+                        color = VoltGlowAccent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
@@ -1247,23 +1410,42 @@ private fun DriverActiveJobCard(
                 OutlinedButton(
                     onClick = onNavigate,
                     shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFF3E444F)),
                     modifier = Modifier.height(48.dp)
                 ) {
-                    Icon(Icons.Rounded.Navigation, contentDescription = "توجيه GPS", tint = ElectricLime)
+                    Icon(Icons.Rounded.Navigation, contentDescription = s.mapRecenterRoute, tint = VoltGlowAccent)
                 }
                 OutlinedButton(
                     onClick = onCall,
                     shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFF3E444F)),
                     modifier = Modifier.height(48.dp)
                 ) {
-                    Icon(Icons.Rounded.Call, contentDescription = "اتصال", tint = ElectricLime)
+                    Icon(Icons.Rounded.Call, contentDescription = s.roleClient, tint = VoltGlowAccent)
                 }
-                OutlinedButton(
-                    onClick = onChat,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.height(48.dp)
+                BadgedBox(
+                    badge = {
+                        if (unreadChatCount > 0) {
+                            Badge(containerColor = UrgentCoral, contentColor = Color.White) {
+                                Text(
+                                    text = if (unreadChatCount > 9) "9+" else "$unreadChatCount",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
                 ) {
-                    Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = "محادثة", tint = ElectricLime)
+                    OutlinedButton(
+                        onClick = onChat,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Color(0xFF3E444F)),
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("driver_open_chat_button")
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = s.clientOpenChat, tint = VoltGlowAccent)
+                    }
                 }
                 if (nextAction != null) {
                     val canAdvance = request.status != RequestStatus.ARRIVED || isPinVerified
@@ -1271,19 +1453,19 @@ private fun DriverActiveJobCard(
                         onClick = { onAdvance(nextAction.second) },
                         enabled = canAdvance,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricLime,
-                            contentColor = ObsidianBlack,
+                            containerColor = WepeEmerald,
+                            contentColor = Color.White,
                             disabledContainerColor = Color(0xFF2E333B),
                             disabledContentColor = Color(0xFF8A94A3)
                         ),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(99.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
                             .testTag("driver_advance_job_button")
                     ) {
                         Text(
-                            text = if (canAdvance) nextAction.first else "أدخل الرمز للبدء",
+                            text = if (canAdvance) nextAction.first else s.craftsmanEnterCodeHint,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -1291,6 +1473,82 @@ private fun DriverActiveJobCard(
                     }
                 }
             }
+
+            if (request.status == RequestStatus.ACCEPTED ||
+                request.status == RequestStatus.EN_ROUTE ||
+                request.status == RequestStatus.ARRIVED ||
+                request.status == RequestStatus.IN_PROGRESS
+            ) {
+                OutlinedButton(
+                    onClick = { showCancelConfirmDialog = true },
+                    border = BorderStroke(1.dp, UrgentCoral.copy(alpha = 0.85f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("craftsman_cancel_job_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = s.clientCancelService,
+                        tint = UrgentCoral,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = s.clientCancelService,
+                        color = UrgentCoral,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
         }
+    }
+
+    if (showCancelConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirmDialog = false },
+            title = {
+                Text(
+                    text = when (s.language) {
+                        AppLanguage.ARABIC -> "تأكيد إلغاء الخدمة"
+                        AppLanguage.FRENCH -> "Confirmer l'annulation"
+                        AppLanguage.ENGLISH -> "Confirm Cancellation"
+                    },
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Text(
+                    when (s.language) {
+                        AppLanguage.ARABIC -> "هل أنت متأكد من إلغاء هذه الخدمة؟ سيتم إشعار الزبون بإلغاء الطلب."
+                        AppLanguage.FRENCH -> "Voulez-vous vraiment annuler ce service ? Le client sera notifié."
+                        AppLanguage.ENGLISH -> "Are you sure you want to cancel this job? The client will be notified."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCancelConfirmDialog = false
+                        onCancel()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = UrgentCoral,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("confirm_craftsman_cancel_job_button")
+                ) {
+                    Text(s.confirm, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelConfirmDialog = false }) {
+                    Text(s.cancel, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 }

@@ -6,6 +6,7 @@ object SupabaseConfig {
     const val STORAGE_BUCKET = "hirafi-media"
     const val KYC_BUCKET = "hirafi-kyc"
     const val KYC_PRIVATE_REF_PREFIX = "kyc://hirafi-kyc/"
+    const val OAUTH_REDIRECT_URL = "hirafi://auth-callback"
 
     val rawUrl: String
         get() = BuildConfig.SUPABASE_URL.trim().removeSuffix("/")
@@ -21,6 +22,11 @@ object SupabaseConfig {
 
     val baseUrlWithSlash: String
         get() = if (rawUrl.endsWith("/")) rawUrl else "$rawUrl/"
+
+    fun googleAuthorizeUrl(): String {
+        val encodedRedirect = java.net.URLEncoder.encode(OAUTH_REDIRECT_URL, "UTF-8")
+        return "$rawUrl/auth/v1/authorize?provider=google&redirect_to=$encodedRedirect&prompt=select_account"
+    }
 
     fun publicMediaUrl(objectPath: String): String {
         val cleanPath = objectPath.trimStart('/')

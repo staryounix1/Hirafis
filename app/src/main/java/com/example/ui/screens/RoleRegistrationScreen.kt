@@ -36,12 +36,14 @@ import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.LocationCity
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,11 +54,13 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,19 +93,32 @@ import com.example.data.model.UserSession
 import com.example.data.remote.SupabaseConfig
 import com.example.ui.auth.GoogleAuthAccount
 import com.example.ui.auth.GoogleAuthHelper
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
+import com.example.ui.components.ObsidianHeroBrush
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
+import com.example.ui.i18n.localizedName
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.VoltGlowAccent
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
 
 @Composable
 fun RoleRegistrationScreen(
     initialSession: UserSession,
+    appLanguage: AppLanguage = AppLanguage.ARABIC,
+    onSelectLanguage: (AppLanguage) -> Unit = {},
     isCloudSaving: Boolean = false,
+    authStatusMessage: String? = null,
+    isAuthError: Boolean = false,
+    onClearAuthMessage: () -> Unit = {},
     currentSupabaseUid: String? = null,
     currentSupabaseEmail: String? = null,
     currentSupabaseDisplayName: String? = null,
@@ -114,6 +131,7 @@ fun RoleRegistrationScreen(
         specialtyId: String?
     ) -> Unit,
     onEmailSignIn: (email: String, password: String) -> Unit,
+    onForgotPassword: (email: String) -> Unit = {},
     onGoogleAuthSuccess: (
         account: GoogleAuthAccount,
         preferredDisplayName: String,
@@ -127,6 +145,7 @@ fun RoleRegistrationScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
+    val s = hirafiStrings()
 
     var isSignUpMode by remember { mutableStateOf(true) }
     var selectedRole by remember { mutableStateOf(UserRole.CLIENT) }
@@ -147,6 +166,8 @@ fun RoleRegistrationScreen(
     var showPassword by remember { mutableStateOf(false) }
     var selectedCity by remember { mutableStateOf(initialSession.city) }
     var isGoogleLoading by remember { mutableStateOf(false) }
+    var showForgotPasswordDialog by remember { mutableStateOf(false) }
+    var resetEmailInput by remember { mutableStateOf("") }
 
     val isBusy = isGoogleLoading || isCloudSaving
     val isNameValid = LoginValidator.isValidFullName(fullName)
@@ -154,9 +175,18 @@ fun RoleRegistrationScreen(
     val isPasswordValid = LoginValidator.isValidPassword(password)
     val chosenSpecialty = if (selectedRole == UserRole.CRAFTSMAN) selectedSpecialtyId else null
     val roleLabel = if (selectedRole == UserRole.CLIENT) {
-        "زبون"
+        UserRole.CLIENT.localizedLabel(s)
     } else {
-        "حرفي (${HirafiCategories.byId(selectedSpecialtyId).nameAr})"
+        "${UserRole.CRAFTSMAN.localizedLabel(s)} (${HirafiCategories.byId(selectedSpecialtyId).localizedName(s)})"
+    }
+
+    val passwordScore = remember(password) {
+        var pts = 0
+        if (password.length >= 6) pts++
+        if (password.length >= 8) pts++
+        if (password.any { it.isDigit() } && password.any { it.isLetter() }) pts++
+        if (password.any { !it.isLetterOrDigit() }) pts++
+        pts
     }
 
     Column(
@@ -170,47 +200,99 @@ fun RoleRegistrationScreen(
             .testTag("role_registration_screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Language Selector Pills (AR / FR / EN)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AppLanguage.entries.forEach { lang ->
+                val isSelected = lang == appLanguage
+                Surface(
+                    color = if (isSelected) WepeEmerald else Color.White,
+                    shape = RoundedCornerShape(99.dp),
+                    border = BorderStroke(1.dp, if (isSelected) WepeEmerald else WepeHairline),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(99.dp))
+                        .clickable { onSelectLanguage(lang) }
+                        .testTag("lang_pill_${lang.code}")
+                ) {
+                    Text(
+                        text = "${lang.shortCode} • ${lang.nativeLabel}",
+                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
         // Obsidian Hero Header
         Card(
             shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = ObsidianBlack),
-            modifier = Modifier.fillMaxWidth()
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(ObsidianHeroBrush)
+                .border(1.dp, VoltGlowAccent.copy(alpha = 0.35f), RoundedCornerShape(24.dp))
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Surface(
-                        color = ElectricLime,
+                        color = WepeEmerald,
                         shape = CircleShape,
-                        modifier = Modifier.size(46.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Login,
                                 contentDescription = null,
-                                tint = ObsidianBlack,
+                                tint = Color.White,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
                     }
                     Column {
                         Text(
-                            text = "التسجيل في تطبيق حرفي",
+                            text = s.appTitle,
                             color = Color.White,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "تطبيق حرفي يربط الزبائن بأفضل الحرفيين المحترفين",
-                            color = ElectricLime,
+                            text = s.authTagline,
+                            color = VoltGlowAccent,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(listOf("تفاوض شفاف", "حرفيون موثوقون", "تتبع GPS حي")) { pill ->
+                        Surface(
+                            color = Color(0xFF20242A),
+                            shape = RoundedCornerShape(99.dp),
+                            border = BorderStroke(1.dp, VoltGlowAccent.copy(alpha = 0.3f))
+                        ) {
+                            Text(
+                                text = "✓ $pill",
+                                color = VoltGlowAccent,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
                     }
                 }
 
@@ -290,6 +372,28 @@ fun RoleRegistrationScreen(
             }
         }
 
+        if (!authStatusMessage.isNullOrBlank()) {
+            Surface(
+                color = if (isAuthError) UrgentCoralSoft else VerifiedEmeraldSoft,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isAuthError) UrgentCoral.copy(alpha = 0.45f) else VerifiedEmerald.copy(alpha = 0.45f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("auth_status_banner")
+            ) {
+                Text(
+                    text = authStatusMessage,
+                    color = if (isAuthError) UrgentCoral else VerifiedEmerald,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+
         // Auth Mode Switcher: Create Account vs Sign In
         if (currentSupabaseUid.isNullOrBlank()) {
             Row(
@@ -297,40 +401,46 @@ fun RoleRegistrationScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Surface(
-                    color = if (isSignUpMode) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                    color = if (isSignUpMode) WepeEmerald else Color.White,
                     shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, if (isSignUpMode) ElectricLime else MaterialTheme.colorScheme.outline),
+                    border = BorderStroke(1.dp, if (isSignUpMode) WepeEmerald else WepeHairline),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable { isSignUpMode = true }
+                        .clickable {
+                            isSignUpMode = true
+                            onClearAuthMessage()
+                        }
                         .testTag("auth_mode_signup")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
-                            text = "إنشاء حساب جديد",
-                            color = if (isSignUpMode) ElectricLime else MaterialTheme.colorScheme.onSurface,
+                            text = s.authSignUpTab,
+                            color = if (isSignUpMode) Color.White else MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 14.sp
                         )
                     }
                 }
                 Surface(
-                    color = if (!isSignUpMode) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                    color = if (!isSignUpMode) WepeEmerald else Color.White,
                     shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, if (!isSignUpMode) ElectricLime else MaterialTheme.colorScheme.outline),
+                    border = BorderStroke(1.dp, if (!isSignUpMode) WepeEmerald else WepeHairline),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable { isSignUpMode = false }
+                        .clickable {
+                            isSignUpMode = false
+                            onClearAuthMessage()
+                        }
                         .testTag("auth_mode_signin")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
-                            text = "تسجيل الدخول",
-                            color = if (!isSignUpMode) ElectricLime else MaterialTheme.colorScheme.onSurface,
+                            text = s.authSignInTab,
+                            color = if (!isSignUpMode) Color.White else MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 14.sp
                         )
@@ -342,7 +452,7 @@ fun RoleRegistrationScreen(
         // Role & Profile Fields (only when creating a new account or finishing an incomplete Supabase session)
         if (isSignUpMode || !currentSupabaseUid.isNullOrBlank()) {
             Text(
-                text = "1. اختر نوع الحساب",
+                text = "1. ${s.authChooseRole}",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold
             )
@@ -353,8 +463,8 @@ fun RoleRegistrationScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 RoleSelectionCard(
-                    title = "زبون",
-                    subtitle = "طلب الخدمات",
+                    title = s.roleClient,
+                    subtitle = s.clientHeroBadge,
                     icon = Icons.Rounded.Person,
                     selected = selectedRole == UserRole.CLIENT,
                     onClick = { selectedRole = UserRole.CLIENT },
@@ -362,8 +472,8 @@ fun RoleRegistrationScreen(
                     modifier = Modifier.weight(1f)
                 )
                 RoleSelectionCard(
-                    title = "حرفي",
-                    subtitle = "مهنة واحدة دائمة",
+                    title = s.roleCraftsman,
+                    subtitle = s.authChooseSpecialty,
                     icon = Icons.Rounded.Build,
                     selected = selectedRole == UserRole.CRAFTSMAN,
                     onClick = { selectedRole = UserRole.CRAFTSMAN },
@@ -375,7 +485,7 @@ fun RoleRegistrationScreen(
             AnimatedVisibility(visible = selectedRole == UserRole.CRAFTSMAN) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "اختر مهنتك الوحيدة الدائمة:",
+                        text = s.authChooseSpecialty,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = VerifiedEmerald
@@ -387,12 +497,12 @@ fun RoleRegistrationScreen(
                         items(HirafiCategories.all, key = { it.id }) { category ->
                             val isPicked = category.id == selectedSpecialtyId
                             Surface(
-                                color = if (isPicked) ObsidianBlack else MaterialTheme.colorScheme.surface,
+                                color = if (isPicked) WepeEmerald else Color.White,
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier
                                     .border(
                                         width = if (isPicked) 2.dp else 1.dp,
-                                        color = if (isPicked) ElectricLime else MaterialTheme.colorScheme.outline,
+                                        color = if (isPicked) WepeEmerald else WepeHairline,
                                         shape = RoundedCornerShape(16.dp)
                                     )
                                     .clip(RoundedCornerShape(16.dp))
@@ -406,12 +516,12 @@ fun RoleRegistrationScreen(
                                     Icon(
                                         imageVector = category.icon,
                                         contentDescription = null,
-                                        tint = if (isPicked) ElectricLime else category.accentColor,
+                                        tint = if (isPicked) Color.White else category.accentColor,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(Modifier.width(6.dp))
                                     Text(
-                                        text = category.nameAr,
+                                        text = category.localizedName(s),
                                         color = if (isPicked) Color.White else MaterialTheme.colorScheme.onSurface,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp
@@ -481,8 +591,8 @@ fun RoleRegistrationScreen(
                                     onClick = { selectedCity = cityName },
                                     label = { Text(cityName, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = ObsidianBlack,
-                                        selectedLabelColor = ElectricLime
+                                        selectedContainerColor = WepeEmerald,
+                                        selectedLabelColor = Color.White
                                     )
                                 )
                             }
@@ -509,10 +619,10 @@ fun RoleRegistrationScreen(
                     )
                 },
                 enabled = !isBusy,
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(99.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricLime,
-                    contentColor = ObsidianBlack
+                    containerColor = WepeEmerald,
+                    contentColor = Color.White
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -520,7 +630,7 @@ fun RoleRegistrationScreen(
                     .testTag("google_sign_in_button")
             ) {
                 if (isBusy) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = Color.White, strokeWidth = 2.5.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("جاري حفظ الحساب في Supabase...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 } else {
@@ -570,14 +680,18 @@ fun RoleRegistrationScreen(
                         },
                         onAuthCancelled = {
                             isGoogleLoading = false
+                        },
+                        onLaunchedBrowserOAuth = {
+                            isGoogleLoading = false
+                            onShowError("جاري فتح تسجيل الدخول عبر متصفح غوغل...")
                         }
                     )
                 },
                 enabled = !isBusy,
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.5.dp, ObsidianBlack),
+                shape = RoundedCornerShape(99.dp),
+                border = BorderStroke(1.5.dp, WepeHairline),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = Color.White,
                     contentColor = ObsidianBlack
                 ),
                 modifier = Modifier
@@ -586,7 +700,7 @@ fun RoleRegistrationScreen(
                     .testTag("google_sign_in_button")
             ) {
                 if (isGoogleLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = WepeEmerald, strokeWidth = 2.5.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("جاري الاتصال بحساب غوغل...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 } else {
@@ -596,6 +710,37 @@ fun RoleRegistrationScreen(
                         text = if (isSignUpMode) "المتابعة كـ $roleLabel عبر غوغل" else "تسجيل الدخول عبر غوغل",
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 14.sp
+                    )
+                }
+            }
+
+            if (SupabaseConfig.isConfigured) {
+                TextButton(
+                    onClick = {
+                        if (GoogleAuthHelper.launchBrowserGoogleOAuth(context)) {
+                            onShowError("جاري فتح تسجيل الدخول عبر متصفح غوغل...")
+                        } else {
+                            onShowError("تعذر فتح المتصفح لتسجيل الدخول عبر غوغل")
+                        }
+                    },
+                    enabled = !isBusy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("google_browser_oauth_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Public,
+                        contentDescription = null,
+                        tint = WepeEmerald,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "أو المتابعة عبر متصفح غوغل",
+                        color = WepeEmeraldDark,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
                     )
                 }
             }
@@ -629,8 +774,13 @@ fun RoleRegistrationScreen(
 
                     OutlinedTextField(
                         value = email,
-                        onValueChange = { if (it.length <= 120) email = it },
-                        label = { Text("البريد الإلكتروني") },
+                        onValueChange = {
+                            if (it.length <= 120) {
+                                email = it
+                                onClearAuthMessage()
+                            }
+                        },
+                        label = { Text(s.authEmailLabel) },
                         placeholder = { Text("example@gmail.com") },
                         leadingIcon = { Icon(Icons.Rounded.Email, contentDescription = null) },
                         trailingIcon = if (isEmailValid) {
@@ -638,6 +788,7 @@ fun RoleRegistrationScreen(
                         } else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                         singleLine = true,
+                        isError = email.isNotBlank() && !isEmailValid,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -646,26 +797,102 @@ fun RoleRegistrationScreen(
 
                     OutlinedTextField(
                         value = password,
-                        onValueChange = { if (it.length <= 72) password = it },
-                        label = { Text("كلمة المرور") },
-                        placeholder = { Text("6 أحرف على الأقل") },
+                        onValueChange = {
+                            if (it.length <= 72) {
+                                password = it
+                                onClearAuthMessage()
+                            }
+                        },
+                        label = { Text(s.authPasswordLabel) },
+                        placeholder = { Text("••••••") },
                         leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
                         trailingIcon = {
                             IconButton(onClick = { showPassword = !showPassword }) {
                                 Icon(
                                     imageVector = if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                    contentDescription = if (showPassword) "إخفاء كلمة المرور" else "إظهار كلمة المرور"
+                                    contentDescription = if (showPassword) "Hide password" else "Show password"
                                 )
                             }
                         },
                         visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
+                        isError = isSignUpMode && password.isNotEmpty() && !isPasswordValid,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("password_input")
                     )
+
+                    if (isSignUpMode && password.isNotEmpty()) {
+                        val (strengthLabel, strengthColor, strengthProgress) = when {
+                            passwordScore >= 3 -> Triple(s.authPasswordStrong, VerifiedEmerald, 1f)
+                            passwordScore == 2 -> Triple(s.authPasswordMedium, StarAmber, 0.62f)
+                            else -> Triple(s.authPasswordWeak, UrgentCoral, 0.30f)
+                        }
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("password_strength_bar")
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "${s.authPasswordStrengthLabel}: $strengthLabel",
+                                    color = strengthColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (!isPasswordValid) s.authPasswordMinError else "",
+                                    color = UrgentCoral,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { strengthProgress },
+                                color = strengthColor,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(99.dp))
+                            )
+                            if (passwordScore < 3) {
+                                Text(
+                                    text = s.authPasswordHint,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+
+                    if (!isSignUpMode) {
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    resetEmailInput = email.trim()
+                                    showForgotPasswordDialog = true
+                                },
+                                modifier = Modifier.testTag("forgot_password_button")
+                            ) {
+                                Text(
+                                    text = s.authForgotPassword,
+                                    color = VerifiedEmerald,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
 
                     Button(
                         onClick = {
@@ -683,10 +910,10 @@ fun RoleRegistrationScreen(
                             }
                         },
                         enabled = !isBusy && isEmailValid && (if (isSignUpMode) isPasswordValid else password.isNotBlank()),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(99.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricLime,
-                            contentColor = ObsidianBlack
+                            containerColor = WepeEmerald,
+                            contentColor = Color.White
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -694,12 +921,12 @@ fun RoleRegistrationScreen(
                             .testTag("email_auth_submit_button")
                     ) {
                         if (isCloudSaving) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ObsidianBlack, strokeWidth = 2.5.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), color = Color.White, strokeWidth = 2.5.dp)
                             Spacer(Modifier.width(10.dp))
-                            Text("جاري الاتصال...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(s.loading, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         } else {
                             Text(
-                                text = if (isSignUpMode) "إنشاء حساب $roleLabel" else "تسجيل الدخول",
+                                text = if (isSignUpMode) "${s.authSignUpCta} ($roleLabel)" else s.authSignInCta,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 15.sp
                             )
@@ -710,6 +937,53 @@ fun RoleRegistrationScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+    }
+
+    if (showForgotPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgotPasswordDialog = false },
+            icon = { Icon(Icons.Rounded.Lock, contentDescription = null, tint = VerifiedEmerald) },
+            title = { Text(s.authForgotPasswordTitle, fontWeight = FontWeight.ExtraBold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(s.authForgotPasswordBody, fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = resetEmailInput,
+                        onValueChange = { resetEmailInput = it },
+                        label = { Text(s.authEmailLabel) },
+                        placeholder = { Text("example@gmail.com") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("forgot_password_email_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onForgotPassword(resetEmailInput.trim())
+                        showForgotPasswordDialog = false
+                    },
+                    enabled = LoginValidator.isValidEmail(resetEmailInput),
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = WepeEmerald,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.testTag("confirm_password_reset_button")
+                ) {
+                    Text(s.authSendResetLink, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForgotPasswordDialog = false }) {
+                    Text(s.cancel)
+                }
+            }
+        )
     }
 }
 
@@ -777,12 +1051,12 @@ private fun RoleSelectionCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        color = if (selected) ElectricLimeSoft else MaterialTheme.colorScheme.surface,
+        color = if (selected) WepeEmeraldSoft else Color.White,
         shape = RoundedCornerShape(18.dp),
         modifier = modifier
             .border(
                 width = if (selected) 2.dp else 1.dp,
-                color = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline,
+                color = if (selected) WepeEmerald else WepeHairline,
                 shape = RoundedCornerShape(18.dp)
             )
             .clip(RoundedCornerShape(18.dp))
@@ -799,12 +1073,12 @@ private fun RoleSelectionCard(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(if (selected) ObsidianBlack else MaterialTheme.colorScheme.surfaceVariant)
+                    .background(if (selected) WepeEmerald else MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (selected) ElectricLime else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -818,14 +1092,14 @@ private fun RoleSelectionCard(
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = if (selected) ObsidianBlack.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (selected) WepeEmeraldDark else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }
             Icon(
                 imageVector = if (selected) Icons.Rounded.RadioButtonChecked else Icons.Rounded.RadioButtonUnchecked,
                 contentDescription = null,
-                tint = if (selected) ObsidianBlack else MaterialTheme.colorScheme.outline,
+                tint = if (selected) WepeEmerald else MaterialTheme.colorScheme.outline,
                 modifier = Modifier.size(18.dp)
             )
         }

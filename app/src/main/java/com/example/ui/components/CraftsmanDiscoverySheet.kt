@@ -62,22 +62,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.rounded.Workspaces
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.example.data.model.CraftsmanPin
 import com.example.data.model.CraftsmanSortOption
 import com.example.data.model.HirafiCategories
 import com.example.data.model.PortfolioItem
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
+import com.example.ui.theme.WepeSoftCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,7 +111,7 @@ fun NearbyCraftsmenSearchSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = Color.White,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
@@ -128,7 +133,7 @@ fun NearbyCraftsmenSearchSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Surface(
-                        color = ObsidianBlack,
+                        color = WepeEmeraldSoft,
                         shape = CircleShape,
                         modifier = Modifier.size(38.dp)
                     ) {
@@ -136,7 +141,7 @@ fun NearbyCraftsmenSearchSheet(
                             Icon(
                                 imageVector = Icons.Rounded.PersonSearch,
                                 contentDescription = null,
-                                tint = ElectricLime,
+                                tint = WepeEmeraldDark,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -174,7 +179,7 @@ fun NearbyCraftsmenSearchSheet(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
                 placeholder = { Text("ابحث باسم الحرفي، التخصص، أو نوع العطل...") },
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = WepeEmeraldDark) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
                         IconButton(onClick = { onSearchQueryChange("") }) {
@@ -184,6 +189,12 @@ fun NearbyCraftsmenSearchSheet(
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = WepeEmerald,
+                    unfocusedBorderColor = WepeHairline,
+                    focusedContainerColor = WepeSoftCard,
+                    unfocusedContainerColor = WepeSoftCard
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("craftsman_search_input")
@@ -203,9 +214,9 @@ fun NearbyCraftsmenSearchSheet(
                         } else null,
                         label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ObsidianBlack,
-                            selectedLabelColor = ElectricLime,
-                            selectedLeadingIconColor = ElectricLime
+                            selectedContainerColor = WepeEmerald,
+                            selectedLabelColor = Color.White,
+                            selectedLeadingIconColor = Color.White
                         ),
                         modifier = Modifier.testTag("radius_chip_$km")
                     )
@@ -230,9 +241,9 @@ fun NearbyCraftsmenSearchSheet(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ElectricLime,
-                            selectedLabelColor = ObsidianBlack,
-                            selectedLeadingIconColor = ObsidianBlack
+                            selectedContainerColor = WepeEmerald,
+                            selectedLabelColor = Color.White,
+                            selectedLeadingIconColor = Color.White
                         ),
                         modifier = Modifier.testTag("only_category_filter_chip")
                     )
@@ -290,8 +301,8 @@ fun NearbyCraftsmenSearchSheet(
                             onClick = { onSelectSort(option) },
                             label = { Text(option.labelAr, fontSize = 12.sp) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ObsidianBlack,
-                                selectedLabelColor = ElectricLime
+                                selectedContainerColor = WepeEmerald,
+                                selectedLabelColor = Color.White
                             ),
                             modifier = Modifier.testTag("craftsman_sort_${option.name.lowercase()}")
                         )
@@ -334,10 +345,10 @@ fun NearbyCraftsmenSearchSheet(
                             onSelectRadiusKm(20)
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricLime,
-                            contentColor = ObsidianBlack
+                            containerColor = WepeEmerald,
+                            contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(99.dp),
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("reset_craftsman_filters_button")
@@ -376,11 +387,11 @@ private fun CraftsmanDiscoveryCard(
 
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+            .border(1.dp, WepeHairline, RoundedCornerShape(20.dp))
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -400,7 +411,7 @@ private fun CraftsmanDiscoveryCard(
                         modifier = Modifier
                             .size(46.dp)
                             .clip(CircleShape)
-                            .background(ObsidianBlack)
+                            .background(WepeEmeraldSoft)
                     ) {
                         if (!pin.avatarUri.isNullOrBlank()) {
                             AsyncImage(
@@ -412,7 +423,7 @@ private fun CraftsmanDiscoveryCard(
                         } else {
                             Text(
                                 text = pin.name.take(1),
-                                color = ElectricLime,
+                                color = WepeEmeraldDark,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp
                             )
@@ -538,10 +549,10 @@ private fun CraftsmanDiscoveryCard(
                 }
                 Button(
                     onClick = onDirectRequest,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(99.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ElectricLime,
-                        contentColor = ObsidianBlack
+                        containerColor = WepeEmerald,
+                        contentColor = Color.White
                     ),
                     modifier = Modifier
                         .weight(1.1f)
@@ -569,6 +580,7 @@ fun CraftsmanDetailDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -579,7 +591,7 @@ fun CraftsmanDetailDialog(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(CircleShape)
-                        .background(ObsidianBlack)
+                        .background(WepeEmeraldSoft)
                 ) {
                     if (!pin.avatarUri.isNullOrBlank()) {
                         AsyncImage(
@@ -591,7 +603,7 @@ fun CraftsmanDetailDialog(
                     } else {
                         Text(
                             text = pin.name.take(1),
-                            color = ElectricLime,
+                            color = WepeEmeraldDark,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp
                         )
@@ -664,7 +676,7 @@ fun CraftsmanDetailDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    color = WepeSoftCard,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -762,7 +774,8 @@ fun CraftsmanDetailDialog(
                 }
 
                 Surface(
-                    color = ElectricLimeSoft,
+                    color = WepeEmeraldSoft,
+                    border = BorderStroke(1.dp, WepeEmerald.copy(alpha = 0.25f)),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -775,13 +788,13 @@ fun CraftsmanDetailDialog(
                             text = "السعر الابتدائي المقترح",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = ObsidianBlack
+                            color = WepeEmeraldDark
                         )
                         Text(
                             text = "${pin.basePriceDh} درهم",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
-                            color = ObsidianBlack
+                            color = WepeEmeraldDark
                         )
                     }
                 }
@@ -801,10 +814,10 @@ fun CraftsmanDetailDialog(
             Button(
                 onClick = { onDirectRequest(pin) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricLime,
-                    contentColor = ObsidianBlack
+                    containerColor = WepeEmerald,
+                    contentColor = Color.White
                 ),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(99.dp),
                 modifier = Modifier
                     .height(48.dp)
                     .testTag("dialog_direct_request_button")

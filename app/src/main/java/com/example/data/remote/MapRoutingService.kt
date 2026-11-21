@@ -100,11 +100,17 @@ object MapRoutingService {
         }
     }
 
-    suspend fun reverseGeocode(context: Context, lat: Double, lng: Double): String {
+    suspend fun reverseGeocode(
+        context: Context,
+        lat: Double,
+        lng: Double,
+        languageCode: String = "ar"
+    ): String {
+        val cleanLang = languageCode.ifBlank { "ar" }
         // 1. Try Android Geocoder first
         val androidResult = withContext(Dispatchers.IO) {
             runCatching {
-                val geocoder = Geocoder(context, Locale("ar"))
+                val geocoder = Geocoder(context, Locale.forLanguageTag(cleanLang))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     suspendCancellableCoroutine { cont ->
                         geocoder.getFromLocation(
@@ -145,14 +151,15 @@ object MapRoutingService {
         }
         if (!androidResult.isNullOrBlank()) return androidResult
 
-        // 2. Fallback to OpenStreetMap Nominatim Arabic reverse geocoding
+        // 2. Fallback to OpenStreetMap Nominatim localized reverse geocoding
         val nominatimResult = withContext(Dispatchers.IO) {
             runCatching {
                 val url = String.format(
                     Locale.US,
-                    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%.6f&lon=%.6f&accept-language=ar",
+                    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%.6f&lon=%.6f&accept-language=%s",
                     lat,
-                    lng
+                    lng,
+                    cleanLang
                 )
                 val req = Request.Builder()
                     .url(url)
@@ -176,17 +183,22 @@ object MapRoutingService {
         }
         if (!nominatimResult.isNullOrBlank()) return nominatimResult
 
-        return String.format(Locale.US, "موقع محدد (%.4f, %.4f)", lat, lng)
+        return String.format(Locale.US, "%.4f, %.4f", lat, lng)
     }
 
-    suspend fun searchPlaces(context: Context, query: String): List<SearchPlaceResult> {
+    suspend fun searchPlaces(
+        context: Context,
+        query: String,
+        languageCode: String = "ar"
+    ): List<SearchPlaceResult> {
         val trimmed = query.trim()
         if (trimmed.length < 2) return emptyList()
+        val cleanLang = languageCode.ifBlank { "ar" }
 
         val nominatim = withContext(Dispatchers.IO) {
             runCatching {
                 val encoded = URLEncoder.encode(trimmed, "UTF-8")
-                val url = "https://nominatim.openstreetmap.org/search?format=json&q=$encoded&limit=5&accept-language=ar"
+                val url = "https://nominatim.openstreetmap.org/search?format=json&q=$encoded&limit=5&accept-language=$cleanLang"
                 val req = Request.Builder()
                     .url(url)
                     .header("User-Agent", "HirafiApp/1.0 (contact@hirafi.app)")
@@ -213,7 +225,7 @@ object MapRoutingService {
 
         return withContext(Dispatchers.IO) {
             runCatching {
-                val geocoder = Geocoder(context, Locale("ar"))
+                val geocoder = Geocoder(context, Locale.forLanguageTag(cleanLang))
                 @Suppress("DEPRECATION")
                 val list = geocoder.getFromLocationName(trimmed, 5).orEmpty()
                 list.map { addr ->

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,15 +67,23 @@ import com.example.data.model.CraftsmanPin
 import com.example.data.model.LiveRouteState
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceRequest
+import com.example.ui.i18n.HirafiStrings
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
 import com.example.ui.theme.ElectricLime
 import com.example.ui.theme.InfoCobalt
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
 import com.mapbox.common.MapboxOptions
 import com.mapbox.geojson.Point
 import com.mapbox.maps.Style
 import com.mapbox.maps.ViewAnnotationAnchor
 import com.mapbox.maps.dsl.cameraOptions
+import com.mapbox.maps.extension.compose.ComposeMapInitOptions
 import com.mapbox.maps.extension.compose.MapboxMap
 import com.mapbox.maps.extension.compose.animation.viewport.rememberMapViewportState
 import com.mapbox.maps.extension.compose.annotation.ViewAnnotation
@@ -90,11 +100,18 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.ln
 
-private enum class HirafiMapStyle(val labelAr: String, val styleUri: String) {
-    STANDARD("قياسي 3D", Style.STANDARD),
-    STREETS("شوارع", Style.MAPBOX_STREETS),
-    DARK("ليلي", Style.DARK),
-    SATELLITE("قمر صناعي", Style.SATELLITE_STREETS);
+private enum class HirafiMapStyle(val styleUri: String) {
+    STANDARD(Style.STANDARD),
+    STREETS(Style.MAPBOX_STREETS),
+    DARK(Style.DARK),
+    SATELLITE(Style.SATELLITE_STREETS);
+
+    fun localizedLabel(s: HirafiStrings): String = when (this) {
+        STANDARD -> s.mapStyleStandard
+        STREETS -> s.mapStyleStreets
+        DARK -> s.mapStyleDark
+        SATELLITE -> s.mapStyleSatellite
+    }
 
     fun next(): HirafiMapStyle {
         val all = entries
@@ -125,6 +142,7 @@ fun HirafiRealMap(
     onClientRequestPinClick: (ServiceRequest) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val s = hirafiStrings()
     val mapboxToken = remember { resolvedMapboxAccessToken() }
     if (mapboxToken.isEmpty()) {
         Box(
@@ -174,10 +192,9 @@ fun HirafiRealMap(
         true
     }
 
-    val isDark = isSystemInDarkTheme()
     val scope = rememberCoroutineScope()
-    var selectedStyle by remember(isDark) {
-        mutableStateOf(if (isDark) HirafiMapStyle.DARK else HirafiMapStyle.STANDARD)
+    var selectedStyle by remember {
+        mutableStateOf(HirafiMapStyle.STANDARD)
     }
 
     val isSearching = activeRequest?.status == RequestStatus.SEARCHING
@@ -223,29 +240,31 @@ fun HirafiRealMap(
         }
     }
 
-    // Fit bounding area when live route starts, changes status, or receives first craftsman coordinate
-    LaunchedEffect(activeRequest?.id, activeRequest?.status, liveRoute.craftsmanLat != null) {
-        if (hasAssigned && activeRequest != null && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
-            val lats = buildList {
-                add(activeRequest.lat)
-                add(liveRoute.craftsmanLat)
-                liveRoute.routePoints.forEach { add(it.first) }
-            }
-            val lngs = buildList {
-                add(activeRequest.lng)
-                add(liveRoute.craftsmanLng)
-                liveRoute.routePoints.forEach { add(it.second) }
-            }
-            if (lats.isNotEmpty() && lngs.isNotEmpty()) {
-                val minLat = lats.min()
-                val maxLat = lats.max()
-                val minLng = lngs.min()
-                val maxLng = lngs.max()
-                val midLat = (minLat + maxLat) / 2.0
-                val midLng = (minLng + maxLng) / 2.0
-                val span = maxOf((maxLat - minLat) * 1.65, (maxLng - minLng) * 1.65, 0.004)
-                val targetZoom = (ln(360.0 / span) / ln(2.0)).coerceIn(11.0, 16.0)
-                ignoreScrollUntilMs = System.currentTimeMillis() + 950L
+    fun fitActiveRouteCamera() {
+        val req = activeRequest ?: return
+        val craftLat = liveRoute.craftsmanLat ?: return
+        val craftLng = liveRoute.craftsmanLng ?: return
+        val lats = buildList {
+            add(req.lat)
+            add(craftLat)
+            liveRoute.routePoints.forEach { add(it.first) }
+        }
+        val lngs = buildList {
+            add(req.lng)
+            add(craftLng)
+            liveRoute.routePoints.forEach { add(it.second) }
+        }
+        if (lats.isNotEmpty() && lngs.isNotEmpty()) {
+            val minLat = lats.min()
+            val maxLat = lats.max()
+            val minLng = lngs.min()
+            val maxLng = lngs.max()
+            val midLat = (minLat + maxLat) / 2.0
+            val midLng = (minLng + maxLng) / 2.0
+            val span = maxOf((maxLat - minLat) * 1.65, (maxLng - minLng) * 1.65, 0.004)
+            val targetZoom = (ln(360.0 / span) / ln(2.0)).coerceIn(11.0, 16.0)
+            ignoreScrollUntilMs = System.currentTimeMillis() + 950L
+            scope.launch {
                 mapViewportState.flyTo(
                     cameraOptions = cameraOptions {
                         center(Point.fromLngLat(midLng, midLat))
@@ -255,6 +274,13 @@ fun HirafiRealMap(
                     animationOptions = mapAnimationOptions { duration(750L) }
                 )
             }
+        }
+    }
+
+    // Fit bounding area when live route starts, changes status, or receives first craftsman coordinate
+    LaunchedEffect(activeRequest?.id, activeRequest?.status, liveRoute.craftsmanLat != null) {
+        if (hasAssigned && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
+            fitActiveRouteCamera()
         }
     }
 
@@ -279,9 +305,18 @@ fun HirafiRealMap(
             }
     }
 
+    val density = LocalDensity.current.density
+    val composeMapInitOptions = remember(density) {
+        ComposeMapInitOptions(
+            pixelRatio = density,
+            textureView = true
+        )
+    }
+
     Box(modifier = modifier.fillMaxSize().testTag("hirafi_real_map")) {
         MapboxMap(
             modifier = Modifier.fillMaxSize(),
+            composeMapInitOptions = composeMapInitOptions,
             mapViewportState = mapViewportState,
             style = {
                 MapStyle(style = selectedStyle.styleUri)
@@ -305,34 +340,36 @@ fun HirafiRealMap(
                 }
             }
         ) {
-            // Live route polyline (dual-stroke for high contrast on both light & dark styles)
+            // Live route polyline (clean Wepe emerald inner line with deep emerald casing)
             if (hasAssigned && liveRoute.routePoints.size >= 2) {
                 val routePoints = remember(liveRoute.routePoints) {
                     liveRoute.routePoints.map { Point.fromLngLat(it.second, it.first) }
                 }
                 PolylineAnnotation(points = routePoints) {
-                    lineColor = ObsidianBlack
+                    lineColor = Color(0xFF0B6E3A)
                     lineWidth = 8.5
                     lineJoin = LineJoin.ROUND
                 }
                 PolylineAnnotation(points = routePoints) {
-                    lineColor = ElectricLime
-                    lineWidth = 4.5
+                    lineColor = WepeEmerald
+                    lineWidth = 5.5
                     lineJoin = LineJoin.ROUND
                 }
             }
 
             // User GPS dot
             if (userGpsLocation != null) {
-                ViewAnnotation(
-                    options = viewAnnotationOptions {
-                        geometry(Point.fromLngLat(userGpsLocation.second, userGpsLocation.first))
-                        annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
-                        allowOverlap(true)
-                        visible(true)
+                key("user_gps_dot") {
+                    ViewAnnotation(
+                        options = viewAnnotationOptions {
+                            geometry(Point.fromLngLat(userGpsLocation.second, userGpsLocation.first))
+                            annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
+                            allowOverlap(true)
+                            visible(true)
+                        }
+                    ) {
+                        GpsDotMarker()
                     }
-                ) {
-                    GpsDotMarker()
                 }
             }
 
@@ -348,7 +385,7 @@ fun HirafiRealMap(
                             }
                         ) {
                             MapBadgePill(
-                                primaryText = "${req.proposedPrice} د.م",
+                                primaryText = "${req.proposedPrice} ${s.currencyDh}",
                                 secondaryText = req.categoryName,
                                 highlighted = true,
                                 onClick = { currentOnClientRequestPinClick(req) }
@@ -358,27 +395,26 @@ fun HirafiRealMap(
                 }
 
                 if (hasAssigned && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
-                    key("craftsman_self_${activeRequest?.id}_${liveRoute.craftsmanLat}_${liveRoute.craftsmanLng}") {
+                    key("craftsman_self_${activeRequest?.id}") {
                         ViewAnnotation(
                             options = viewAnnotationOptions {
                                 geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
-                                annotationAnchor { anchor(ViewAnnotationAnchor.TOP) }
+                                annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
                                 allowOverlap(true)
                                 visible(true)
                             }
                         ) {
-                            MapBadgePill(
-                                primaryText = "موقعك",
-                                secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "وصلت",
-                                highlighted = true,
-                                onClick = null
+                            LiveMovingCraftsmanMarker(
+                                etaMinutes = liveRoute.etaMinutes,
+                                unitMin = s.unitMin,
+                                label = s.roleCraftsman
                             )
                         }
                     }
                 }
             } else {
                 if (activeRequest != null) {
-                    key("client_req_${activeRequest.id}_${activeRequest.lat}_${activeRequest.lng}_${isSearching}") {
+                    key("client_req_${activeRequest.id}") {
                         ViewAnnotation(
                             options = viewAnnotationOptions {
                                 geometry(Point.fromLngLat(activeRequest.lng, activeRequest.lat))
@@ -388,27 +424,26 @@ fun HirafiRealMap(
                             }
                         ) {
                             ClientPinBadge(
-                                label = if (isSearching) "جاري البحث" else "موقعك"
+                                label = if (isSearching) s.statusSearching else s.roleClient
                             )
                         }
                     }
                 }
 
                 if (hasAssigned && liveRoute.craftsmanLat != null && liveRoute.craftsmanLng != null) {
-                    key("assigned_craftsman_${activeRequest?.id}_${liveRoute.craftsmanLat}_${liveRoute.craftsmanLng}") {
+                    key("assigned_craftsman_${activeRequest?.id}") {
                         ViewAnnotation(
                             options = viewAnnotationOptions {
                                 geometry(Point.fromLngLat(liveRoute.craftsmanLng, liveRoute.craftsmanLat))
-                                annotationAnchor { anchor(ViewAnnotationAnchor.TOP) }
+                                annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
                                 allowOverlap(true)
                                 visible(true)
                             }
                         ) {
-                            MapBadgePill(
-                                primaryText = activeRequest?.assignedCraftsmanName?.split(" ")?.firstOrNull() ?: "الحرفي",
-                                secondaryText = if (liveRoute.etaMinutes > 0) "${liveRoute.etaMinutes} د" else "مباشر",
-                                highlighted = true,
-                                onClick = null
+                            LiveMovingCraftsmanMarker(
+                                etaMinutes = liveRoute.etaMinutes,
+                                unitMin = s.unitMin,
+                                label = activeRequest?.assignedCraftsmanName?.split(" ")?.firstOrNull() ?: s.roleCraftsman
                             )
                         }
                     }
@@ -425,7 +460,7 @@ fun HirafiRealMap(
                                 }
                             ) {
                                 MapBadgePill(
-                                    primaryText = "${pin.basePriceDh} د.م",
+                                    primaryText = "${pin.basePriceDh} ${s.currencyDh}",
                                     secondaryText = "★${pin.rating}",
                                     highlighted = highlighted,
                                     onClick = { currentOnCraftsmanPinClick(pin) }
@@ -442,7 +477,40 @@ fun HirafiRealMap(
             SearchRadarOverlay()
         }
 
-        // inDrive Center Crosshair Pin when choosing pickup/service location
+        // Live Active Job Telemetry Pill on Map (Crisp White + Emerald)
+        if (hasAssigned) {
+            Surface(
+                color = Color.White.copy(alpha = 0.96f),
+                shape = RoundedCornerShape(99.dp),
+                border = BorderStroke(1.2.dp, WepeEmerald.copy(alpha = 0.55f)),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 74.dp, end = 12.dp)
+                    .testTag("live_telemetry_map_pill")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                ) {
+                    LivePulseDot(color = WepeEmerald, dotSize = 7.dp)
+                    val telemetryText = if (liveRoute.etaMinutes > 0) {
+                        "${s.mapLiveEtaPrefix} ${liveRoute.etaMinutes} ${s.unitMin} • ${liveRoute.remainingDistanceKm} ${s.unitKm}"
+                    } else {
+                        activeRequest?.status?.localizedLabel(s).orEmpty()
+                    }
+                    Text(
+                        text = telemetryText,
+                        color = ObsidianBlack,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+        }
+
+        // Clean Emerald Center Crosshair Pin when choosing service location
         if (showCenterDragPin) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -451,31 +519,33 @@ fun HirafiRealMap(
                     .offset(y = (-26).dp)
             ) {
                 Surface(
-                    color = ObsidianBlack,
-                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White,
+                    shape = RoundedCornerShape(99.dp),
+                    border = BorderStroke(1.dp, WepeEmerald.copy(alpha = 0.45f)),
                     shadowElevation = 6.dp
                 ) {
                     Text(
                         text = "موقع الخدمة",
-                        color = ElectricLime,
+                        color = WepeEmeraldDark,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
+                Spacer(Modifier.height(4.dp))
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(38.dp)
                         .shadow(8.dp, CircleShape)
                         .clip(CircleShape)
-                        .background(ElectricLime)
-                        .border(3.dp, ObsidianBlack, CircleShape)
+                        .background(WepeEmerald)
+                        .border(3.dp, Color.White, CircleShape)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.LocationOn,
                         contentDescription = "موقع الخدمة",
-                        tint = ObsidianBlack,
+                        tint = Color.White,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -483,7 +553,7 @@ fun HirafiRealMap(
                     modifier = Modifier
                         .size(width = 10.dp, height = 4.dp)
                         .clip(CircleShape)
-                        .background(ObsidianBlack.copy(alpha = 0.45f))
+                        .background(WepeEmerald.copy(alpha = 0.35f))
                 )
             }
         }
@@ -545,7 +615,8 @@ fun HirafiRealMap(
 
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = ObsidianBlack,
+                color = Color.White,
+                border = BorderStroke(1.dp, WepeHairline),
                 shadowElevation = 6.dp,
                 modifier = Modifier
                     .clickable { selectedStyle = selectedStyle.next() }
@@ -557,17 +628,47 @@ fun HirafiRealMap(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Layers,
-                        contentDescription = "تبديل نمط الخريطة",
-                        tint = ElectricLime,
+                        contentDescription = s.mapStyleStandard,
+                        tint = WepeEmerald,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        text = selectedStyle.labelAr,
-                        color = ElectricLime,
+                        text = selectedStyle.localizedLabel(s),
+                        color = ObsidianBlack,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
+                }
+            }
+
+            if (hasAssigned && liveRoute.craftsmanLat != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = WepeEmerald,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .clickable { fitActiveRouteCamera() }
+                        .testTag("map_recenter_route_button")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MyLocation,
+                            contentDescription = s.mapRecenterRoute,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = s.mapRecenterRoute,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
                 }
             }
         }
@@ -594,30 +695,85 @@ private fun GpsDotMarker() {
 }
 
 @Composable
+private fun LiveMovingCraftsmanMarker(
+    etaMinutes: Int,
+    unitMin: String,
+    label: String
+) {
+    val etaLabel = if (etaMinutes > 0) "$etaMinutes $unitMin" else "LIVE"
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(
+            color = WepeEmerald,
+            shape = CircleShape,
+            shadowElevation = 6.dp,
+            border = BorderStroke(2.dp, Color.White)
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = etaLabel,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(30.dp)
+                .shadow(6.dp, CircleShape)
+                .clip(CircleShape)
+                .background(Color.White)
+                .border(3.dp, WepeEmerald, CircleShape)
+        ) {
+            Text(
+                text = label.take(1).uppercase(),
+                color = ObsidianBlack,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+    }
+}
+
+@Composable
 private fun ClientPinBadge(label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(
-            color = ObsidianBlack,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.5.dp, ElectricLime),
+            color = Color.White,
+            shape = RoundedCornerShape(99.dp),
+            border = BorderStroke(1.2.dp, WepeEmerald),
             shadowElevation = 5.dp
         ) {
             Text(
                 text = label,
-                color = ElectricLime,
+                color = WepeEmeraldDark,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(3.dp))
         Box(
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(14.dp)
+                .size(22.dp)
                 .clip(CircleShape)
-                .background(ElectricLime)
-                .border(2.5.dp, ObsidianBlack, CircleShape)
-        )
+                .background(WepeEmerald.copy(alpha = 0.25f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(ObsidianBlack)
+                    .border(2.5.dp, Color.White, CircleShape)
+            )
+        }
     }
 }
 
@@ -628,10 +784,10 @@ private fun MapBadgePill(
     highlighted: Boolean,
     onClick: (() -> Unit)?
 ) {
-    val bgColor = if (highlighted) ObsidianBlack else Color.White
-    val borderColor = if (highlighted) ElectricLime else VerifiedEmerald
-    val titleColor = if (highlighted) ElectricLime else ObsidianBlack
-    val subColor = if (highlighted) Color.White else Color.DarkGray
+    val bgColor = if (highlighted) Color.White else Color.White.copy(alpha = 0.94f)
+    val borderColor = if (highlighted) WepeEmerald else WepeHairline
+    val titleColor = ObsidianBlack
+    val subColor = if (highlighted) WepeEmeraldDark else Color(0xFF667085)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -644,8 +800,8 @@ private fun MapBadgePill(
         Surface(
             color = bgColor,
             shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(2.dp, borderColor),
-            shadowElevation = 6.dp
+            border = BorderStroke(if (highlighted) 1.8.dp else 1.dp, borderColor),
+            shadowElevation = if (highlighted) 8.dp else 4.dp
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -655,14 +811,14 @@ private fun MapBadgePill(
                     text = primaryText,
                     color = titleColor,
                     fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1
                 )
                 Text(
                     text = secondaryText,
                     color = subColor,
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
             }
@@ -671,7 +827,8 @@ private fun MapBadgePill(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(borderColor)
+                .background(if (highlighted) WepeEmerald else ObsidianBlack.copy(alpha = 0.55f))
+                .border(1.5.dp, Color.White, CircleShape)
         )
     }
 }
@@ -689,7 +846,7 @@ private fun SearchRadarOverlay() {
         label = "radarScale"
     )
     val radarAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.45f,
+        initialValue = 0.42f,
         targetValue = 0.0f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 1900, easing = LinearEasing),
@@ -702,12 +859,12 @@ private fun SearchRadarOverlay() {
         val maxR = size.minDimension * 0.28f
         val center = Offset(size.width / 2f, size.height * 0.44f)
         drawCircle(
-            color = ElectricLime.copy(alpha = radarAlpha),
+            color = WepeEmerald.copy(alpha = radarAlpha),
             radius = maxR * radarScale,
             center = center
         )
         drawCircle(
-            color = ElectricLime.copy(alpha = 0.35f),
+            color = WepeEmerald.copy(alpha = 0.35f),
             radius = maxR * 0.45f,
             center = center,
             style = Stroke(width = 4f)

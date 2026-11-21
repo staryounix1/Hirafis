@@ -21,6 +21,7 @@ object HirafiNotificationHelper {
     const val CHANNEL_ORDERS = "hirafi_orders"
     const val CHANNEL_MESSAGES = "hirafi_messages"
     const val CHANNEL_ADMIN = "hirafi_admin"
+    const val EXTRA_TARGET_ROUTE = "hirafi_target_route"
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -66,13 +67,17 @@ object HirafiNotificationHelper {
         channelId: String,
         notificationId: Int,
         title: String,
-        body: String
+        body: String,
+        targetRoute: String? = null
     ) {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
 
         val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            if (!targetRoute.isNullOrBlank()) {
+                putExtra(EXTRA_TARGET_ROUTE, targetRoute)
+            }
         }
         val pendingIntent = PendingIntent.getActivity(
             context,

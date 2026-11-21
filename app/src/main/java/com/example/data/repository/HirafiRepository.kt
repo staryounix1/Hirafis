@@ -38,6 +38,7 @@ import com.example.data.remote.SupabaseSessionManager
 import com.example.data.remote.SupabaseStorageService
 import com.example.data.remote.SupabaseTimestampParser
 import com.example.data.remote.SupabaseUserProfileRepository
+import com.example.ui.i18n.AppLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +68,17 @@ class HirafiRepository(
     private val fallbackSyncErrorFlow = MutableStateFlow<String?>(null).asStateFlow()
 
     val userSession: Flow<UserSession> = prefs.userSessionFlow
+    val appLanguage: Flow<AppLanguage> = prefs.appLanguageFlow
+
+    suspend fun setAppLanguage(language: AppLanguage) {
+        prefs.setAppLanguage(language)
+    }
+
+    suspend fun sendPasswordResetEmail(email: String): Result<Unit> {
+        val mgr = supabaseSessionManager
+            ?: return Result.failure(IllegalStateException("خدمة استعادة كلمة المرور غير متاحة حالياً"))
+        return mgr.sendPasswordResetEmail(email)
+    }
 
     val supabaseAuthStateFlow: StateFlow<SupabaseAuthState?>
         get() = supabaseSessionManager?.authState ?: fallbackAuthStateFlow
@@ -349,6 +361,20 @@ class HirafiRepository(
             preferredSpecialtyId = preferredSpecialtyId,
             authProvider = "google"
         )
+    }
+
+    suspend fun completeGoogleOAuthCallback(uriString: String): Result<UserSession?> {
+        val manager = supabaseSessionManager
+            ?: return Result.failure(IllegalStateException("تعذر تهيئة جلسة Supabase"))
+        val authState = manager.completeOAuthCallback(uriString).getOrElse {
+            return Result.failure(it)
+        }
+        val restored = restoreExistingSupabaseProfileIfLocked(
+            uid = authState.uid,
+            fallbackEmail = authState.email,
+            authProvider = "google"
+        ).getOrElse { return Result.failure(it) }
+        return Result.success(restored)
     }
 
     suspend fun signUpWithSupabaseEmailAccount(
@@ -1326,7 +1352,27 @@ class HirafiRepository(
     }
 
     suspend fun cancelRequest(requestId: String) {
+        val session = prefs.userSessionFlow.first()
         advanceJobStatus(requestId, RequestStatus.CANCELLED)
+        val actorLabel = session.fullName.trim().ifBlank {
+            if (session.role == UserRole.CRAFTSMAN) "الحرفي" else "الزبون"
+        }
+        val notice = if (session.role == UserRole.CRAFTSMAN) {
+            "تم إلغاء الخدمة من طرف الحرفي ($actorLabel)"
+        } else {
+            "تم إلغاء الخدمة من طرف الزبون ($actorLabel)"
+        }
+        runCatching {
+            val senderId = if (requiresCloudSyncFor(session)) ensureActiveCloudUid(session) else session.userId
+            insertSystemWelcomeMessage(
+                requestId = requestId,
+                senderId = senderId,
+                senderName = actorLabel,
+                role = session.role,
+                text = notice
+            )
+        }
+        supabaseMarketplaceRepo?.triggerRefresh()
     }
 
     suspend fun sendChatMessage(requestId: String, text: String) {

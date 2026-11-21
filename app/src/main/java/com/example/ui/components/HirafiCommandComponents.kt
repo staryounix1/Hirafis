@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,27 +26,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -62,6 +66,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +76,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.AcceptanceRadarMetrics
 import com.example.data.model.FairPriceAssessment
 import com.example.data.model.HirafiQuickScenarios
@@ -77,13 +86,15 @@ import com.example.data.model.JobPriceProposal
 import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceRequest
 import com.example.data.model.SmartTriageScenario
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.UrgentCoral
-import com.example.ui.theme.VerifiedEmerald
-import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.VoltGlowAccent
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
+import com.example.ui.theme.WepeSoftCard
 import java.util.Locale
 
 @Composable
@@ -111,7 +122,7 @@ fun SmartTriageCarousel(
             Icon(
                 imageVector = Icons.Rounded.AutoAwesome,
                 contentDescription = null,
-                tint = VerifiedEmerald,
+                tint = WepeEmerald,
                 modifier = Modifier.size(15.dp)
             )
             Text(
@@ -129,12 +140,12 @@ fun SmartTriageCarousel(
             items(scenarios, key = { it.id }) { item ->
                 val isSelected = currentTitle.trim() == item.titleAr
                 Surface(
-                    color = if (isSelected) ObsidianBlack else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                    color = if (isSelected) WepeEmeraldSoft else Color.White,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .border(
                             width = if (isSelected) 1.5.dp else 1.dp,
-                            color = if (isSelected) ElectricLime else MaterialTheme.colorScheme.outline,
+                            color = if (isSelected) WepeEmerald else WepeHairline,
                             shape = RoundedCornerShape(14.dp)
                         )
                         .clip(RoundedCornerShape(14.dp))
@@ -153,20 +164,20 @@ fun SmartTriageCarousel(
                                 Icon(
                                     imageVector = Icons.Rounded.Bolt,
                                     contentDescription = null,
-                                    tint = if (isSelected) ElectricLime else UrgentCoral,
+                                    tint = if (isSelected) WepeEmeraldDark else UrgentCoral,
                                     modifier = Modifier.size(13.dp)
                                 )
                             }
                             Text(
                                 text = item.titleAr,
-                                color = if (isSelected) ElectricLime else MaterialTheme.colorScheme.onSurface,
+                                color = if (isSelected) WepeEmeraldDark else ObsidianBlack,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
                             )
                         }
                         Text(
                             text = "${item.recommendedPriceDh} د.م • ~${item.estimatedMinutes} د",
-                            color = if (isSelected) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (isSelected) WepeEmeraldDark.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -202,10 +213,9 @@ fun AcceptanceRadarGauge(
     )
     val accentColor = when (metrics.fairness) {
         FairPriceAssessment.LOW -> UrgentCoral
-        FairPriceAssessment.FAIR -> VerifiedEmerald
-        FairPriceAssessment.GENEROUS -> ElectricLime
+        FairPriceAssessment.FAIR -> WepeEmerald
+        FairPriceAssessment.GENEROUS -> WepeEmeraldDark
     }
-    val textFg = if (metrics.fairness == FairPriceAssessment.GENEROUS) ObsidianBlack else accentColor
 
     Column(
         modifier = modifier
@@ -222,14 +232,14 @@ fun AcceptanceRadarGauge(
                 Icon(
                     imageVector = Icons.Rounded.Radar,
                     contentDescription = null,
-                    tint = if (metrics.fairness == FairPriceAssessment.GENEROUS) VerifiedEmerald else accentColor,
+                    tint = accentColor,
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
                     text = metrics.speedLabelAr,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = textFg
+                    color = accentColor
                 )
             }
             Text(
@@ -245,7 +255,7 @@ fun AcceptanceRadarGauge(
                 .fillMaxWidth()
                 .height(6.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.surface)
+                .background(WepeHairline)
         ) {
             Box(
                 modifier = Modifier
@@ -255,8 +265,8 @@ fun AcceptanceRadarGauge(
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                VerifiedEmerald,
-                                if (metrics.fairness == FairPriceAssessment.LOW) UrgentCoral else ElectricLime
+                                WepeEmerald,
+                                if (metrics.fairness == FairPriceAssessment.LOW) UrgentCoral else VoltGlowAccent
                             )
                         )
                     )
@@ -301,7 +311,6 @@ fun LiveDispatchSonarOverlay(
     )
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Non-blocking translucent radar pulse centered over the service location
         Canvas(
             modifier = Modifier
                 .size(210.dp)
@@ -311,15 +320,15 @@ fun LiveDispatchSonarOverlay(
             val maxRadius = size.minDimension / 2f
 
             listOf(ring1, ring2).forEach { progress ->
-                val alpha = (1f - progress).coerceIn(0f, 1f) * 0.48f
+                val alpha = (1f - progress).coerceIn(0f, 1f) * 0.45f
                 val radius = maxRadius * progress
                 drawCircle(
-                    color = ElectricLime.copy(alpha = alpha * 0.35f),
+                    color = WepeEmerald.copy(alpha = alpha * 0.25f),
                     radius = radius,
                     center = center
                 )
                 drawCircle(
-                    color = VerifiedEmerald.copy(alpha = alpha),
+                    color = WepeEmerald.copy(alpha = alpha),
                     radius = radius,
                     center = center,
                     style = Stroke(width = 3.dp.toPx())
@@ -327,26 +336,25 @@ fun LiveDispatchSonarOverlay(
             }
 
             drawCircle(
-                color = ObsidianBlack,
-                radius = 9.dp.toPx(),
+                color = Color.White,
+                radius = 10.dp.toPx(),
                 center = center
             )
             drawCircle(
-                color = ElectricLime,
-                radius = 5.dp.toPx(),
+                color = WepeEmerald,
+                radius = 6.dp.toPx(),
                 center = center
             )
         }
 
-        // Top Live Telemetry Strip
         Surface(
-            color = ObsidianBlack.copy(alpha = 0.92f),
-            shape = RoundedCornerShape(22.dp),
+            color = Color.White.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(99.dp),
             shadowElevation = 10.dp,
+            border = BorderStroke(1.2.dp, WepeEmerald.copy(alpha = 0.45f)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 132.dp, start = 16.dp, end = 16.dp)
-                .border(1.dp, ElectricLime.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
                 .testTag("live_dispatch_sonar_hud")
         ) {
             Row(
@@ -354,23 +362,18 @@ fun LiveDispatchSonarOverlay(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(ElectricLime)
-                )
+                LivePulseDot(color = WepeEmerald, dotSize = 7.dp)
                 Text(
                     text = "رادار $categoryName • $radiusLabel",
-                    color = Color.White,
+                    color = ObsidianBlack,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Surface(
-                    color = Color(0xFF262A31),
-                    shape = RoundedCornerShape(10.dp)
+                    color = WepeEmeraldSoft,
+                    shape = RoundedCornerShape(99.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -379,13 +382,13 @@ fun LiveDispatchSonarOverlay(
                         Icon(
                             imageVector = Icons.Rounded.Schedule,
                             contentDescription = null,
-                            tint = ElectricLime,
+                            tint = WepeEmeraldDark,
                             modifier = Modifier.size(12.dp)
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
                             text = timeText,
-                            color = ElectricLime,
+                            color = WepeEmeraldDark,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
@@ -393,15 +396,15 @@ fun LiveDispatchSonarOverlay(
                 }
                 if (offersCount > 0) {
                     Surface(
-                        color = VerifiedEmerald,
-                        shape = RoundedCornerShape(10.dp)
+                        color = WepeEmerald,
+                        shape = RoundedCornerShape(99.dp)
                     ) {
                         Text(
                             text = "$offersCount عروض",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
                 }
@@ -424,20 +427,20 @@ fun JobHandshakePinBanner(
 
     if (request.status == RequestStatus.IN_PROGRESS) {
         Surface(
-            color = VerifiedEmeraldSoft,
-            shape = RoundedCornerShape(14.dp),
+            color = WepeEmeraldSoft,
+            shape = RoundedCornerShape(16.dp),
             modifier = modifier
                 .fillMaxWidth()
-                .border(1.dp, VerifiedEmerald.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                .border(1.dp, WepeEmerald.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
                 .testTag("active_warranty_badge")
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(19.dp))
                     Column {
                         Text(
                             text = "تم التحقق وبدء التنفيذ بأمان",
@@ -447,24 +450,24 @@ fun JobHandshakePinBanner(
                         )
                         Text(
                             text = "ضمان حرفي 30 يوماً ساري • $warrantyCode",
-                            color = VerifiedEmerald,
+                            color = WepeEmeraldDark,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 10.sp
                         )
                     }
                 }
-                Icon(Icons.Rounded.Shield, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Shield, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(18.dp))
             }
         }
         return
     }
 
     Surface(
-        color = ObsidianBlack,
+        color = Color.White,
         shape = RoundedCornerShape(16.dp),
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, ElectricLime.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+            .border(1.2.dp, WepeEmerald.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
             .testTag("client_handshake_pin_banner")
     ) {
         Row(
@@ -479,22 +482,30 @@ fun JobHandshakePinBanner(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Lock,
-                    contentDescription = null,
-                    tint = ElectricLime,
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(WepeEmeraldSoft)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lock,
+                        contentDescription = null,
+                        tint = WepeEmeraldDark,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
                 Column {
                     Text(
                         text = "رمز التحقق عند الوصول",
-                        color = Color.White,
+                        color = ObsidianBlack,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )
                     Text(
                         text = "أعطِ هذا الرمز للحرفي ليبدأ العمل",
-                        color = Color(0xFFB5BFC9),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 10.sp
                     )
                 }
@@ -503,13 +514,13 @@ fun JobHandshakePinBanner(
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 pin.forEach { digit ->
                     Surface(
-                        color = Color(0xFF262A31),
+                        color = WepeSoftCard,
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.border(1.dp, ElectricLime.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        modifier = Modifier.border(1.dp, WepeEmerald.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                     ) {
                         Text(
                             text = digit.toString(),
-                            color = ElectricLime,
+                            color = WepeEmeraldDark,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 15.sp,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -533,10 +544,11 @@ fun CraftsmanHandshakePinVerifier(
 
     if (isVerified) {
         Surface(
-            color = VerifiedEmerald.copy(alpha = 0.2f),
+            color = WepeEmeraldSoft,
             shape = RoundedCornerShape(14.dp),
             modifier = modifier
                 .fillMaxWidth()
+                .border(1.dp, WepeEmerald.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                 .testTag("craftsman_pin_verified_badge")
         ) {
             Row(
@@ -544,10 +556,10 @@ fun CraftsmanHandshakePinVerifier(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(18.dp))
                 Text(
                     text = "تم تأكيد رمز الأمان — يمكنك البدء الآن",
-                    color = VerifiedEmerald,
+                    color = WepeEmeraldDark,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp
                 )
@@ -561,7 +573,7 @@ fun CraftsmanHandshakePinVerifier(
         shape = RoundedCornerShape(16.dp),
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, StarAmber.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+            .border(1.dp, WepeEmerald.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
             .testTag("craftsman_pin_verifier")
     ) {
         Column(
@@ -596,9 +608,9 @@ fun CraftsmanHandshakePinVerifier(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = ElectricLime,
+                        focusedTextColor = VoltGlowAccent,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = ElectricLime,
+                        focusedBorderColor = WepeEmerald,
                         unfocusedBorderColor = Color(0xFF3E444F)
                     ),
                     shape = RoundedCornerShape(12.dp),
@@ -619,7 +631,7 @@ fun CraftsmanHandshakePinVerifier(
                         }
                     },
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                    colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
                     modifier = Modifier
                         .height(50.dp)
                         .testTag("confirm_craftsman_pin_button")
@@ -650,63 +662,261 @@ fun WarrantyCertificateDialog(
     val completedAt = remember(request.updatedAtMillis) { JobHandshakeSecurity.formatCompletionDate(request.updatedAtMillis) }
     val finalPrice = request.acceptedPrice ?: request.proposedPrice
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = ObsidianBlack,
-        titleContentColor = Color.White,
-        textContentColor = Color.White,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = Color.White,
+            shape = RoundedCornerShape(26.dp),
+            shadowElevation = 16.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(Icons.Rounded.Verified, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(26.dp))
-                Column {
-                    Text("شهادة ضمان حرفي", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = Color.White)
-                    Text("حماية جودة لمدة 30 يوماً", fontSize = 11.sp, color = VerifiedEmerald, fontWeight = FontWeight.Bold)
+                // Header: Service Complete + Close
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(WepeEmeraldSoft)
+                        ) {
+                            Icon(Icons.Rounded.Verified, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(22.dp))
+                        }
+                        Column {
+                            Text(
+                                text = "اكتملت الخدمة ($completedAt)",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.sp,
+                                color = ObsidianBlack,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "شهادة ضمان حرفي • 30 يوماً",
+                                fontSize = 11.sp,
+                                color = WepeEmeraldDark,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Rounded.Close, contentDescription = "إغلاق", tint = ObsidianBlack)
+                    }
                 }
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(
-                    color = Color(0xFF20242A),
-                    shape = RoundedCornerShape(14.dp),
+
+                // Embedded Styled Route Map Preview Banner (Screen 4 Look)
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, ElectricLime.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .height(104.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFFEEF3F7))
+                        .border(1.dp, WepeHairline, RoundedCornerShape(18.dp))
                 ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("رقم الضمان المعتمد", fontSize = 10.sp, color = Color(0xFF98A2B3))
-                        Text(warrantyCode, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = ElectricLime)
-                        HorizontalDivider(color = Color(0xFF333842))
-                        WarrantyRow("الخدمة", "${request.title} (${request.categoryName})")
-                        WarrantyRow("الحرفي المنفذ", request.assignedCraftsmanName ?: "حرفي معتمد")
-                        WarrantyRow("الموقع", request.addressLabel)
-                        WarrantyRow("المبلغ المؤدى", "$finalPrice درهم")
-                        WarrantyRow("تاريخ الإنجاز", completedAt)
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val gridColor = Color(0xFFDEE6EE)
+                        drawLine(gridColor, Offset(0f, size.height * 0.28f), Offset(size.width, size.height * 0.42f), strokeWidth = 4.dp.toPx())
+                        drawLine(gridColor, Offset(0f, size.height * 0.72f), Offset(size.width, size.height * 0.62f), strokeWidth = 5.dp.toPx())
+                        drawLine(gridColor, Offset(size.width * 0.3f, 0f), Offset(size.width * 0.22f, size.height), strokeWidth = 4.dp.toPx())
+                        drawLine(gridColor, Offset(size.width * 0.7f, 0f), Offset(size.width * 0.78f, size.height), strokeWidth = 4.dp.toPx())
+
+                        val start = Offset(size.width * 0.2f, size.height * 0.72f)
+                        val mid = Offset(size.width * 0.52f, size.height * 0.44f)
+                        val end = Offset(size.width * 0.78f, size.height * 0.26f)
+                        val routePath = Path().apply {
+                            moveTo(start.x, start.y)
+                            cubicTo(
+                                size.width * 0.32f, size.height * 0.72f,
+                                size.width * 0.42f, size.height * 0.42f,
+                                mid.x, mid.y
+                            )
+                            cubicTo(
+                                size.width * 0.64f, size.height * 0.46f,
+                                size.width * 0.68f, size.height * 0.26f,
+                                end.x, end.y
+                            )
+                        }
+                        drawPath(
+                            path = routePath,
+                            color = Color(0xFF0B6E3A),
+                            style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        drawPath(
+                            path = routePath,
+                            color = WepeEmerald,
+                            style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        drawCircle(color = WepeEmeraldSoft, radius = 10.dp.toPx(), center = start)
+                        drawCircle(color = ObsidianBlack, radius = 5.dp.toPx(), center = start)
+                        drawCircle(color = WepeEmeraldSoft, radius = 10.dp.toPx(), center = end)
+                        drawCircle(color = WepeEmerald, radius = 6.dp.toPx(), center = end)
+                    }
+                    Surface(
+                        color = Color.White.copy(alpha = 0.94f),
+                        shape = RoundedCornerShape(99.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = warrantyCode,
+                            color = WepeEmeraldDark,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                // Vertical 2-dot Route / Service Timeline
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(WepeEmerald)
+                        )
+                        Column {
+                            Text("موقع الخدمة", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(request.addressLabel, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ObsidianBlack)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(ObsidianBlack)
+                        )
+                        Column {
+                            Text("الخدمة المنفذة", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${request.title} (${request.categoryName})", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ObsidianBlack)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = WepeHairline)
+
+                // Craftsman Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(WepeEmeraldSoft)
+                                .border(1.5.dp, WepeEmerald, CircleShape)
+                        ) {
+                            Text(
+                                text = (request.assignedCraftsmanName ?: "ح").take(1),
+                                color = WepeEmeraldDark,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 17.sp
+                            )
+                        }
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = request.assignedCraftsmanName ?: "حرفي معتمد",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = ObsidianBlack
+                                )
+                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = WepeEmerald, modifier = Modifier.size(15.dp))
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Icon(Icons.Rounded.Star, contentDescription = null, tint = StarAmber, modifier = Modifier.size(13.dp))
+                                Text(
+                                    text = "${request.assignedCraftsmanRating ?: 4.9} • ${request.categoryName}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    Surface(color = WepeSoftCard, shape = RoundedCornerShape(10.dp)) {
+                        Text(
+                            text = "30 يوم ضمان",
+                            color = WepeEmeraldDark,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = WepeHairline)
+
+                // Payment Breakdown (Screen 4 Look)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("تفاصيل الدفع والضمان", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = ObsidianBlack)
+                    WarrantyRow("أجرة الخدمة المتفق عليها", "$finalPrice درهم")
+                    WarrantyRow("حماية ضمان حرفي (30 يوماً)", "مشمولة (0 درهم)")
+                    WarrantyRow("رمز الضمان المعتمد", warrantyCode)
+                    HorizontalDivider(color = WepeHairline)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("الإجمالي المدفوع", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = ObsidianBlack)
+                        Text("$finalPrice درهم", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = WepeEmeraldDark)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(0.7f).height(48.dp)
+                    ) {
+                        Text("إغلاق", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Button(
+                        onClick = onShare,
+                        shape = RoundedCornerShape(99.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
+                        modifier = Modifier
+                            .weight(1.3f)
+                            .height(50.dp)
+                            .testTag("share_warranty_button")
+                    ) {
+                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("مشاركة الشهادة", fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onShare,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
-                modifier = Modifier.testTag("share_warranty_button")
-            ) {
-                Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("مشاركة الشهادة", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("إغلاق", color = Color(0xFFB5BFC9))
-            }
         }
-    )
+    }
 }
 
 @Composable
@@ -716,15 +926,16 @@ private fun WarrantyRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top
     ) {
-        Text(text = label, fontSize = 11.sp, color = Color(0xFF98A2B3))
+        Text(text = label, fontSize = 12.sp, color = Color(0xFF667085))
         Spacer(Modifier.width(8.dp))
         Text(
             text = value,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White,
+            color = ObsidianBlack,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
     }
 }
+

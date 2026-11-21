@@ -46,7 +46,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.TrendingUp
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
@@ -94,14 +94,18 @@ import com.example.data.model.HirafiCategories
 import com.example.data.model.IdentityVerificationStatus
 import com.example.data.model.IdentityVerificationValidator
 import com.example.data.model.UserSession
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.UrgentCoralSoft
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.VoltGlowAccent
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
+import com.example.ui.theme.WepeSoftCard
 import com.example.ui.viewmodel.HirafiViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -223,7 +227,7 @@ fun CraftsmanVerificationScreen(
                     Surface(
                         color = when (session.verificationStatus) {
                             IdentityVerificationStatus.VERIFIED -> VerifiedEmeraldSoft
-                            IdentityVerificationStatus.PENDING_REVIEW -> ElectricLimeSoft
+                            IdentityVerificationStatus.PENDING_REVIEW -> WepeEmeraldSoft
                             IdentityVerificationStatus.REJECTED -> UrgentCoralSoft
                             IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.surfaceVariant
                         },
@@ -245,7 +249,7 @@ fun CraftsmanVerificationScreen(
                                 contentDescription = null,
                                 tint = when (session.verificationStatus) {
                                     IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
-                                    IdentityVerificationStatus.PENDING_REVIEW -> ObsidianBlack
+                                    IdentityVerificationStatus.PENDING_REVIEW -> WepeEmeraldDark
                                     IdentityVerificationStatus.REJECTED -> UrgentCoral
                                     IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
@@ -257,7 +261,7 @@ fun CraftsmanVerificationScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = when (session.verificationStatus) {
                                     IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
-                                    IdentityVerificationStatus.PENDING_REVIEW -> ObsidianBlack
+                                    IdentityVerificationStatus.PENDING_REVIEW -> WepeEmeraldDark
                                     IdentityVerificationStatus.REJECTED -> UrgentCoral
                                     IdentityVerificationStatus.NOT_SUBMITTED -> MaterialTheme.colorScheme.onSurfaceVariant
                                 }
@@ -266,7 +270,7 @@ fun CraftsmanVerificationScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = Color.White
                 )
             )
         }
@@ -412,10 +416,10 @@ fun CraftsmanVerificationScreen(
                             )
                         },
                         enabled = completedSteps == 4,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(99.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricLime,
-                            contentColor = ObsidianBlack,
+                            containerColor = WepeEmerald,
+                            contentColor = Color.White,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         ),
@@ -456,9 +460,9 @@ private fun VerificationHeroCard(
     val category = HirafiCategories.byId(session.craftsmanSpecialtyId)
     val accent = when (session.verificationStatus) {
         IdentityVerificationStatus.VERIFIED -> VerifiedEmerald
-        IdentityVerificationStatus.PENDING_REVIEW -> ElectricLime
+        IdentityVerificationStatus.PENDING_REVIEW -> VoltGlowAccent
         IdentityVerificationStatus.REJECTED -> UrgentCoral
-        IdentityVerificationStatus.NOT_SUBMITTED -> ElectricLime
+        IdentityVerificationStatus.NOT_SUBMITTED -> VoltGlowAccent
     }
 
     Card(
@@ -647,8 +651,8 @@ private fun VerificationStepCinCard(
                 ),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = ObsidianBlack,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    focusedBorderColor = WepeEmerald,
+                    unfocusedBorderColor = WepeHairline
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -720,7 +724,7 @@ private fun VerificationDocumentSlotCard(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Rounded.Refresh, contentDescription = null, tint = VoltGlowAccent, modifier = Modifier.size(14.dp))
                             Text("تغيير الصورة", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -744,8 +748,8 @@ private fun VerificationDocumentSlotCard(
             } else {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    color = WepeSoftCard,
+                    border = BorderStroke(1.dp, WepeHairline),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(112.dp)
@@ -763,12 +767,12 @@ private fun VerificationDocumentSlotCard(
                             modifier = Modifier.weight(1f)
                         ) {
                             Surface(
-                                color = ObsidianBlack,
+                                color = WepeEmeraldSoft,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.size(48.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Icon(icon, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(24.dp))
+                                    Icon(icon, contentDescription = null, tint = WepeEmeraldDark, modifier = Modifier.size(24.dp))
                                 }
                             }
                             Column {
@@ -785,12 +789,12 @@ private fun VerificationDocumentSlotCard(
                             }
                         }
                         Surface(
-                            color = ElectricLime,
+                            color = WepeEmerald,
                             shape = CircleShape,
                             modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Rounded.AddAPhoto, contentDescription = null, tint = ObsidianBlack, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Rounded.AddAPhoto, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
                             }
                         }
                     }
@@ -829,8 +833,8 @@ private fun VerificationSelfieSlotCard(
                 modifier = Modifier
                     .size(72.dp)
                     .clip(CircleShape)
-                    .background(if (isDone) VerifiedEmeraldSoft else MaterialTheme.colorScheme.surfaceVariant)
-                    .border(2.dp, if (isDone) VerifiedEmerald else ElectricLime, CircleShape)
+                    .background(if (isDone) VerifiedEmeraldSoft else WepeSoftCard)
+                    .border(2.dp, if (isDone) VerifiedEmerald else WepeEmerald, CircleShape)
             ) {
                 if (isDone) {
                     AsyncImage(
@@ -843,7 +847,7 @@ private fun VerificationSelfieSlotCard(
                     Icon(
                         imageVector = Icons.Rounded.Face,
                         contentDescription = null,
-                        tint = ObsidianBlack,
+                        tint = WepeEmeraldDark,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -862,7 +866,7 @@ private fun VerificationSelfieSlotCard(
             }
 
             Surface(
-                color = if (isDone) VerifiedEmerald else ObsidianBlack,
+                color = WepeEmerald,
                 shape = CircleShape,
                 modifier = Modifier.size(40.dp)
             ) {
@@ -870,7 +874,7 @@ private fun VerificationSelfieSlotCard(
                     Icon(
                         imageVector = if (isDone) Icons.Rounded.CheckCircle else Icons.Rounded.AddAPhoto,
                         contentDescription = null,
-                        tint = if (isDone) Color.White else ElectricLime,
+                        tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -894,8 +898,8 @@ private fun PendingVerificationTimelineCard() {
 
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.5.dp, ElectricLime),
+        color = Color.White,
+        border = BorderStroke(1.5.dp, WepeEmerald),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("kyc_pending_card")
@@ -906,8 +910,8 @@ private fun PendingVerificationTimelineCard() {
             modifier = Modifier.padding(20.dp)
         ) {
             CircularProgressIndicator(
-                color = ObsidianBlack,
-                trackColor = ElectricLimeSoft,
+                color = WepeEmerald,
+                trackColor = WepeEmeraldSoft,
                 modifier = Modifier.size(46.dp)
             )
             Text(
@@ -997,7 +1001,7 @@ private fun VerifiedDigitalBadgeSection(
         }
 
         TrustPerkRow(
-            icon = Icons.Rounded.TrendingUp,
+            icon = Icons.AutoMirrored.Rounded.TrendingUp,
             title = "أولوية في قبول العروض",
             subtitle = "الزبائن يثقون أسرع بالحرفي الموثق ويقبلون عروضه بنسبة أعلى."
         )
@@ -1014,8 +1018,8 @@ private fun VerifiedDigitalBadgeSection(
 
         Button(
             onClick = onDone,
-            shape = RoundedCornerShape(18.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+            shape = RoundedCornerShape(99.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp)
@@ -1091,12 +1095,12 @@ private fun TrustPerkRow(
             modifier = Modifier.padding(14.dp)
         ) {
             Surface(
-                color = ObsidianBlack,
+                color = WepeEmeraldSoft,
                 shape = CircleShape,
                 modifier = Modifier.size(40.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = ElectricLime, modifier = Modifier.size(20.dp))
+                    Icon(icon, contentDescription = null, tint = WepeEmeraldDark, modifier = Modifier.size(20.dp))
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -1118,7 +1122,7 @@ private fun StepHeaderRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Surface(
-            color = if (isDone) VerifiedEmerald else ObsidianBlack,
+            color = if (isDone) VerifiedEmerald else WepeEmeraldSoft,
             shape = CircleShape,
             modifier = Modifier.size(24.dp)
         ) {
@@ -1128,7 +1132,7 @@ private fun StepHeaderRow(
                 } else {
                     Text(
                         text = "$stepNumber",
-                        color = ElectricLime,
+                        color = WepeEmeraldDark,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.ExtraBold
                     )

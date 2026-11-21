@@ -5,6 +5,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -56,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -88,13 +90,19 @@ import com.example.data.model.RequestStatus
 import com.example.data.model.ServiceOffer
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserRole
-import com.example.ui.theme.ElectricLime
-import com.example.ui.theme.ElectricLimeSoft
+import com.example.ui.i18n.AppLanguage
+import com.example.ui.i18n.hirafiStrings
+import com.example.ui.i18n.localizedLabel
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.StarAmber
 import com.example.ui.theme.UrgentCoral
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.VerifiedEmeraldSoft
+import com.example.ui.theme.WepeEmerald
+import com.example.ui.theme.WepeEmeraldDark
+import com.example.ui.theme.WepeEmeraldSoft
+import com.example.ui.theme.WepeHairline
+import com.example.ui.theme.WepeSoftCard
 import com.example.ui.viewmodel.BiddingUiState
 import com.example.ui.viewmodel.RealtimeBiddingViewModel
 
@@ -139,6 +147,7 @@ fun RealtimeBiddingComponent(
     onCompletedOrAccepted: () -> Unit = {},
     onDismiss: (() -> Unit)? = null
 ) {
+    val s = hirafiStrings()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(request.id) {
@@ -160,8 +169,8 @@ fun RealtimeBiddingComponent(
 
     val pulseTransition = rememberInfiniteTransition(label = "live_bidding_pulse")
     val liveDotColor by pulseTransition.animateColor(
-        initialValue = VerifiedEmerald,
-        targetValue = ElectricLime,
+        initialValue = WepeEmerald,
+        targetValue = Color(0xFF00D962),
         animationSpec = infiniteRepeatable(
             animation = tween(900),
             repeatMode = RepeatMode.Reverse
@@ -187,7 +196,7 @@ fun RealtimeBiddingComponent(
                 modifier = Modifier.weight(1f)
             ) {
                 Surface(
-                    color = ObsidianBlack,
+                    color = WepeEmeraldSoft,
                     shape = CircleShape,
                     modifier = Modifier.size(40.dp)
                 ) {
@@ -195,7 +204,7 @@ fun RealtimeBiddingComponent(
                         Icon(
                             imageVector = Icons.Rounded.Gavel,
                             contentDescription = null,
-                            tint = ElectricLime,
+                            tint = WepeEmeraldDark,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -212,15 +221,25 @@ fun RealtimeBiddingComponent(
                                 .background(liveDotColor)
                         )
                         Text(
-                            text = "غرفة المزايدة المباشرة",
+                            text = when (s.language) {
+                                AppLanguage.ARABIC -> "غرفة المزايدة المباشرة"
+                                AppLanguage.FRENCH -> "Salle d'enchères en direct"
+                                AppLanguage.ENGLISH -> "Live Bidding Room"
+                            },
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = ObsidianBlack
                         )
                     }
+                    val startLabel = when (s.language) {
+                        AppLanguage.ARABIC -> "السعر الابتدائي"
+                        AppLanguage.FRENCH -> "Prix initial"
+                        AppLanguage.ENGLISH -> "Starting price"
+                    }
                     Text(
-                        text = "${request.categoryName} • السعر الابتدائي ${request.proposedPrice} د.م",
+                        text = "${request.categoryName} • $startLabel ${request.proposedPrice} ${s.currencyDh}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF667085),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -236,9 +255,9 @@ fun RealtimeBiddingComponent(
                         .testTag("refresh_bidding_button")
                 ) {
                     if (syncing) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = WepeEmerald, strokeWidth = 2.dp)
                     } else {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "تحديث العروض")
+                        Icon(Icons.Rounded.Refresh, contentDescription = s.refresh, tint = ObsidianBlack)
                     }
                 }
                 if (onDismiss != null) {
@@ -248,7 +267,7 @@ fun RealtimeBiddingComponent(
                             .size(48.dp)
                             .testTag("close_bidding_sheet_button")
                     ) {
-                        Icon(Icons.Rounded.Close, contentDescription = "إغلاق")
+                        Icon(Icons.Rounded.Close, contentDescription = s.close, tint = ObsidianBlack)
                     }
                 }
             }
@@ -256,8 +275,9 @@ fun RealtimeBiddingComponent(
 
         // Request Brief Card
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+            color = WepeSoftCard,
             shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, WepeHairline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -272,28 +292,29 @@ fun RealtimeBiddingComponent(
                         text = request.title,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = ObsidianBlack,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "${request.clientName} • ${request.addressLabel}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF667085),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
                 Spacer(Modifier.width(8.dp))
                 Surface(
-                    color = ObsidianBlack,
-                    shape = RoundedCornerShape(12.dp)
+                    color = WepeEmerald,
+                    shape = RoundedCornerShape(99.dp)
                 ) {
                     Text(
-                        text = "${(uiState as? BiddingUiState.Active)?.request?.proposedPrice ?: request.proposedPrice} د.م",
-                        color = ElectricLime,
+                        text = "${(uiState as? BiddingUiState.Active)?.request?.proposedPrice ?: request.proposedPrice} ${s.currencyDh}",
+                        color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -307,7 +328,7 @@ fun RealtimeBiddingComponent(
                         .fillMaxWidth()
                         .padding(vertical = 32.dp)
                 ) {
-                    CircularProgressIndicator(color = ElectricLime)
+                    CircularProgressIndicator(color = WepeEmerald)
                 }
             }
 
@@ -372,6 +393,7 @@ private fun CraftsmanBidSubmissionView(
     onAcceptAtClientPrice: () -> Unit,
     onAcceptCounterOffer: (ServiceOffer) -> Unit
 ) {
+    val s = hirafiStrings()
     var showCustomCraftsmanPriceDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -384,13 +406,13 @@ private fun CraftsmanBidSubmissionView(
             val remainingSec = ((myOffer.expiresAtMillis - nowMillis) / 1000L).coerceAtLeast(0L)
             val isCountered = myOffer.status == OfferStatus.COUNTERED
             Surface(
-                color = if (isCountered) StarAmber.copy(alpha = 0.16f) else ElectricLimeSoft,
+                color = if (isCountered) StarAmber.copy(alpha = 0.14f) else WepeEmeraldSoft,
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
-                        width = if (isCountered) 1.5.dp else 1.dp,
-                        color = if (isCountered) StarAmber else VerifiedEmerald.copy(alpha = 0.3f),
+                        width = if (isCountered) 1.5.dp else 1.2.dp,
+                        color = if (isCountered) StarAmber else WepeEmerald.copy(alpha = 0.45f),
                         shape = RoundedCornerShape(16.dp)
                     )
                     .testTag(if (isCountered) "craftsman_counter_offer_card" else "craftsman_submitted_offer_card")
@@ -406,30 +428,35 @@ private fun CraftsmanBidSubmissionView(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (isCountered)
-                                    "عرض مضاد من الزبون: ${myOffer.offeredPrice} د.م"
-                                else
-                                    "عرضك المرسل حالياً: ${myOffer.offeredPrice} د.م",
+                                text = when (s.language) {
+                                    AppLanguage.ARABIC -> if (isCountered) "عرض مضاد من الزبون: ${myOffer.offeredPrice} ${s.currencyDh}" else "عرضك المرسل حالياً: ${myOffer.offeredPrice} ${s.currencyDh}"
+                                    AppLanguage.FRENCH -> if (isCountered) "Contre-offre client : ${myOffer.offeredPrice} ${s.currencyDh}" else "Votre offre envoyée : ${myOffer.offeredPrice} ${s.currencyDh}"
+                                    AppLanguage.ENGLISH -> if (isCountered) "Client counter-offer: ${myOffer.offeredPrice} ${s.currencyDh}" else "Your active offer: ${myOffer.offeredPrice} ${s.currencyDh}"
+                                },
                                 fontWeight = FontWeight.Bold,
                                 color = ObsidianBlack,
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = "${myOffer.status.labelAr} • الوصول خلال ${myOffer.etaMinutes} د • متبقي ${remainingSec} ث",
+                                text = "${myOffer.status.localizedLabel(s)} • ${myOffer.etaMinutes} ${s.unitMin} • ${remainingSec}s",
                                 fontSize = 11.sp,
-                                color = ObsidianBlack.copy(alpha = 0.75f)
+                                color = WepeEmeraldDark
                             )
                         }
                         Surface(
-                            color = ObsidianBlack,
-                            shape = RoundedCornerShape(10.dp)
+                            color = WepeEmerald,
+                            shape = RoundedCornerShape(99.dp)
                         ) {
                             Text(
-                                text = if (isCountered) "مفاوضة" else "عرضك الخاص",
-                                color = ElectricLime,
+                                text = if (isCountered) s.offerCountered else when (s.language) {
+                                    AppLanguage.ARABIC -> "عرضك الخاص"
+                                    AppLanguage.FRENCH -> "Votre offre"
+                                    AppLanguage.ENGLISH -> "Your Offer"
+                                },
+                                color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             )
                         }
                     }
@@ -442,9 +469,9 @@ private fun CraftsmanBidSubmissionView(
                             Button(
                                 onClick = { onAcceptCounterOffer(myOffer) },
                                 enabled = !draft.isSubmitting,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(99.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = VerifiedEmerald,
+                                    containerColor = WepeEmerald,
                                     contentColor = Color.White
                                 ),
                                 modifier = Modifier
@@ -455,7 +482,7 @@ private fun CraftsmanBidSubmissionView(
                                 Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text(
-                                    text = "قبول (${myOffer.offeredPrice} د.م)",
+                                    text = "${s.confirm} (${myOffer.offeredPrice} ${s.currencyDh})",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp
                                 )
@@ -464,15 +491,25 @@ private fun CraftsmanBidSubmissionView(
                                 onClick = {
                                     onSetPrice(priceProposal.clampedPrice(myOffer.offeredPrice + 10))
                                 },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(99.dp),
+                                border = BorderStroke(1.dp, WepeHairline),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(48.dp)
                                     .testTag("counter_back_button")
                             ) {
-                                Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Rounded.SwapHoriz, contentDescription = null, tint = ObsidianBlack, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("عرض آخر", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(
+                                    text = when (s.language) {
+                                        AppLanguage.ARABIC -> "عرض آخر"
+                                        AppLanguage.FRENCH -> "Autre offre"
+                                        AppLanguage.ENGLISH -> "Counter"
+                                    },
+                                    color = ObsidianBlack,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -483,8 +520,10 @@ private fun CraftsmanBidSubmissionView(
         // Price Stepper Card
         Card(
             shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-            modifier = Modifier.fillMaxWidth()
+            colors = CardDefaults.cardColors(containerColor = WepeSoftCard),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, WepeHairline, RoundedCornerShape(18.dp))
         ) {
             Column(
                 modifier = Modifier.padding(14.dp),
@@ -495,11 +534,19 @@ private fun CraftsmanBidSubmissionView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("حدّد سعر عرضك المضاد", fontWeight = FontWeight.Bold)
                     Text(
-                        text = "سعر الزبون: ${request.proposedPrice} د.م",
+                        text = when (s.language) {
+                            AppLanguage.ARABIC -> "حدّد سعر عرضك المضاد"
+                            AppLanguage.FRENCH -> "Fixez votre offre"
+                            AppLanguage.ENGLISH -> "Set your bid price"
+                        },
+                        fontWeight = FontWeight.Bold,
+                        color = ObsidianBlack
+                    )
+                    Text(
+                        text = "${s.roleClient}: ${request.proposedPrice} ${s.currencyDh}",
                         fontSize = 12.sp,
-                        color = VerifiedEmerald,
+                        color = WepeEmeraldDark,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -512,18 +559,21 @@ private fun CraftsmanBidSubmissionView(
                     OutlinedButton(
                         onClick = { onAdjustPrice(-10) },
                         shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, WepeHairline),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = ObsidianBlack),
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("bidding_minus_10")
                     ) {
-                        Icon(Icons.Rounded.Remove, contentDescription = "نقص 10", modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Remove, contentDescription = "-10", modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(2.dp))
                         Text("10", fontWeight = FontWeight.Bold)
                     }
 
                     Surface(
-                        color = ObsidianBlack,
+                        color = Color.White,
                         shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.6.dp, WepeEmerald),
                         modifier = Modifier
                             .height(48.dp)
                             .clip(RoundedCornerShape(16.dp))
@@ -535,16 +585,16 @@ private fun CraftsmanBidSubmissionView(
                             modifier = Modifier.padding(horizontal = 18.dp)
                         ) {
                             Text(
-                                text = "${draft.offeredPrice} درهم",
-                                color = ElectricLime,
+                                text = "${draft.offeredPrice} ${s.currencyDh}",
+                                color = ObsidianBlack,
                                 fontSize = 19.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.ExtraBold
                             )
                             Spacer(Modifier.width(6.dp))
                             Icon(
                                 imageVector = Icons.Rounded.Edit,
-                                contentDescription = "تعديل السعر يدوياً",
-                                tint = Color.White.copy(alpha = 0.72f),
+                                contentDescription = s.save,
+                                tint = WepeEmerald,
                                 modifier = Modifier.size(15.dp)
                             )
                         }
@@ -553,11 +603,13 @@ private fun CraftsmanBidSubmissionView(
                     OutlinedButton(
                         onClick = { onAdjustPrice(10) },
                         shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, WepeHairline),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = ObsidianBlack),
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("bidding_plus_10")
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = "زيد 10", modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Add, contentDescription = "+10", modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(2.dp))
                         Text("10", fontWeight = FontWeight.Bold)
                     }
@@ -569,10 +621,10 @@ private fun CraftsmanBidSubmissionView(
                 // Quick Price Presets
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val presets = listOf(
-                        request.proposedPrice to "سعر الزبون (${request.proposedPrice})",
-                        (request.proposedPrice + 15) to "+15 د.م",
-                        (request.proposedPrice + 30) to "+30 د.م",
-                        (request.proposedPrice + 50) to "+50 د.م"
+                        request.proposedPrice to "${s.roleClient} (${request.proposedPrice})",
+                        (request.proposedPrice + 15) to "+15 ${s.currencyDh}",
+                        (request.proposedPrice + 30) to "+30 ${s.currencyDh}",
+                        (request.proposedPrice + 50) to "+50 ${s.currencyDh}"
                     )
                     items(presets) { (price, label) ->
                         FilterChip(
@@ -580,8 +632,8 @@ private fun CraftsmanBidSubmissionView(
                             onClick = { onSetPrice(price) },
                             label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ObsidianBlack,
-                                selectedLabelColor = ElectricLime
+                                selectedContainerColor = WepeEmeraldSoft,
+                                selectedLabelColor = WepeEmeraldDark
                             )
                         )
                     }
@@ -598,19 +650,28 @@ private fun CraftsmanBidSubmissionView(
             Icon(
                 imageVector = Icons.Rounded.Schedule,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = WepeEmerald,
                 modifier = Modifier.size(18.dp)
             )
-            Text("وقت الوصول:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = when (s.language) {
+                    AppLanguage.ARABIC -> "وقت الوصول:"
+                    AppLanguage.FRENCH -> "Arrivée :"
+                    AppLanguage.ENGLISH -> "ETA:"
+                },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = ObsidianBlack
+            )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(listOf(5, 10, 15, 20, 30)) { mins ->
                     FilterChip(
                         selected = draft.etaMinutes == mins,
                         onClick = { onSelectEta(mins) },
-                        label = { Text("$mins د", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        label = { Text("$mins ${s.unitMin}", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ElectricLime,
-                            selectedLabelColor = ObsidianBlack
+                            selectedContainerColor = WepeEmerald,
+                            selectedLabelColor = Color.White
                         ),
                         modifier = Modifier.testTag("eta_chip_$mins")
                     )
@@ -621,9 +682,21 @@ private fun CraftsmanBidSubmissionView(
         OutlinedTextField(
             value = draft.note,
             onValueChange = onNoteChange,
-            label = { Text("ملاحظة أو تفاصيل للزبون (اختياري)") },
+            label = {
+                Text(
+                    when (s.language) {
+                        AppLanguage.ARABIC -> "ملاحظة أو تفاصيل للزبون (اختياري)"
+                        AppLanguage.FRENCH -> "Note pour le client (optionnel)"
+                        AppLanguage.ENGLISH -> "Note for client (optional)"
+                    }
+                )
+            },
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = WepeEmerald,
+                unfocusedBorderColor = WepeHairline
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("craftsman_bid_note_input")
@@ -632,8 +705,8 @@ private fun CraftsmanBidSubmissionView(
         Button(
             onClick = onSubmitBid,
             enabled = !draft.isSubmitting,
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+            shape = RoundedCornerShape(99.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
@@ -642,7 +715,7 @@ private fun CraftsmanBidSubmissionView(
             Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(6.dp))
             Text(
-                text = if (draft.isSubmitting) "جاري الإرسال..." else "إرسال عرض السعر (${draft.offeredPrice} د.م)",
+                text = if (draft.isSubmitting) s.loading else "${s.craftsmanSendOffer} (${draft.offeredPrice} ${s.currencyDh})",
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp
             )
@@ -659,8 +732,13 @@ private fun CraftsmanBidSubmissionView(
         ) {
             Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = VerifiedEmerald, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
+            val acceptNowLabel = when (s.language) {
+                AppLanguage.ARABIC -> "قبول فوري بسعر الزبون"
+                AppLanguage.FRENCH -> "Accepter au prix client"
+                AppLanguage.ENGLISH -> "Accept at client price"
+            }
             Text(
-                text = "قبول فوري بسعر الزبون (${request.proposedPrice} د.م)",
+                text = "$acceptNowLabel (${request.proposedPrice} ${s.currencyDh})",
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -669,7 +747,7 @@ private fun CraftsmanBidSubmissionView(
 
     if (showCustomCraftsmanPriceDialog) {
         CustomPriceInputDialog(
-            title = "تحديد سعر العرض المضاد",
+            title = s.craftsmanSendOffer,
             initialPrice = draft.offeredPrice,
             onDismiss = { showCustomCraftsmanPriceDialog = false },
             onConfirm = { newPrice ->
@@ -695,6 +773,7 @@ private fun ClientRealtimeOffersView(
     onAdjustClientPrice: (Int) -> Unit,
     onSetClientPrice: (Int) -> Unit
 ) {
+    val s = hirafiStrings()
     var showCustomClientPriceDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -714,10 +793,10 @@ private fun ClientRealtimeOffersView(
                     FilterChip(
                         selected = sortOption == opt,
                         onClick = { onSelectSort(opt) },
-                        label = { Text(opt.labelAr, fontSize = 12.sp) },
+                        label = { Text(opt.localizedLabel(s), fontSize = 12.sp) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ObsidianBlack,
-                            selectedLabelColor = ElectricLime
+                            selectedContainerColor = WepeEmerald,
+                            selectedLabelColor = Color.White
                         ),
                         modifier = Modifier.testTag("bidding_sort_${opt.name.lowercase()}")
                     )
@@ -727,7 +806,7 @@ private fun ClientRealtimeOffersView(
 
         if (offers.isEmpty()) {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                color = WepeSoftCard,
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -739,18 +818,27 @@ private fun ClientRealtimeOffersView(
                     Icon(
                         imageVector = Icons.Rounded.Schedule,
                         contentDescription = null,
-                        tint = VerifiedEmerald,
+                        tint = WepeEmerald,
                         modifier = Modifier.size(36.dp)
                     )
                     Text(
-                        text = "في انتظار عروض الحرفيين المباشرة...",
+                        text = when (s.language) {
+                            AppLanguage.ARABIC -> "في انتظار عروض الحرفيين المباشرة..."
+                            AppLanguage.FRENCH -> "En attente des offres en direct..."
+                            AppLanguage.ENGLISH -> "Waiting for live craftsman offers..."
+                        },
                         fontWeight = FontWeight.Bold,
+                        color = ObsidianBlack,
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        text = "ستظهر العروض فور وصولها ويمكنك قبولها أو إرسال عرض مضاد.",
+                        text = when (s.language) {
+                            AppLanguage.ARABIC -> "ستظهر العروض فور وصولها ويمكنك قبولها أو إرسال عرض مضاد."
+                            AppLanguage.FRENCH -> "Les offres apparaîtront ici dès leur réception."
+                            AppLanguage.ENGLISH -> "Offers appear immediately so you can accept or counter."
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color(0xFF667085)
                     )
                 }
             }
@@ -767,9 +855,9 @@ private fun ClientRealtimeOffersView(
             ) {
                 items(offers, key = { it.id }) { offer ->
                     val badge = when (sortOption) {
-                        OfferSortOption.BEST_PRICE -> if (offer.id == bestPriceId) "الأقل سعراً" else null
-                        OfferSortOption.FASTEST_ETA -> if (offer.id == fastestId) "الأسرع وصولاً" else null
-                        OfferSortOption.TOP_RATED -> if (offer.id == topRatedId) "الأعلى تقييماً" else null
+                        OfferSortOption.BEST_PRICE -> if (offer.id == bestPriceId) OfferSortOption.BEST_PRICE.localizedLabel(s) else null
+                        OfferSortOption.FASTEST_ETA -> if (offer.id == fastestId) OfferSortOption.FASTEST_ETA.localizedLabel(s) else null
+                        OfferSortOption.TOP_RATED -> if (offer.id == topRatedId) OfferSortOption.TOP_RATED.localizedLabel(s) else null
                     }
                     IncomingOfferCard(
                         offer = offer,
@@ -784,7 +872,7 @@ private fun ClientRealtimeOffersView(
             }
         }
 
-        HorizontalDivider()
+        HorizontalDivider(color = WepeHairline)
 
         FairPriceIndicatorPill(priceProposal = priceProposal)
 
@@ -795,21 +883,23 @@ private fun ClientRealtimeOffersView(
         ) {
             OutlinedButton(
                 onClick = { onAdjustClientPrice(-10) },
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(99.dp),
+                border = BorderStroke(1.dp, WepeHairline),
                 modifier = Modifier
                     .weight(0.9f)
                     .height(48.dp)
                     .testTag("bidding_client_minus_10")
             ) {
-                Text("-10", fontWeight = FontWeight.Bold)
+                Text("-10", fontWeight = FontWeight.Bold, color = ObsidianBlack)
             }
             Surface(
-                color = ObsidianBlack,
-                shape = RoundedCornerShape(14.dp),
+                color = Color.White,
+                shape = RoundedCornerShape(99.dp),
+                border = BorderStroke(1.6.dp, WepeEmerald),
                 modifier = Modifier
                     .weight(1.3f)
                     .height(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(99.dp))
                     .clickable { showCustomClientPriceDialog = true }
                     .testTag("bidding_client_price_pill")
             ) {
@@ -819,35 +909,35 @@ private fun ClientRealtimeOffersView(
                     modifier = Modifier.padding(horizontal = 8.dp)
                 ) {
                     Text(
-                        text = "${request.proposedPrice} د.م",
-                        color = ElectricLime,
+                        text = "${request.proposedPrice} ${s.currencyDh}",
+                        color = ObsidianBlack,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 15.sp
                     )
                     Spacer(Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Rounded.Edit,
-                        contentDescription = "تعديل السعر المقترح",
-                        tint = Color.White.copy(alpha = 0.72f),
+                        contentDescription = s.clientYourProposedPrice,
+                        tint = WepeEmerald,
                         modifier = Modifier.size(14.dp)
                     )
                 }
             }
             Button(
                 onClick = { onAdjustClientPrice(10) },
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
                 modifier = Modifier
                     .weight(1f)
                     .height(48.dp)
                     .testTag("bidding_client_plus_10")
             ) {
-                Text("+10 د.م", fontWeight = FontWeight.Bold)
+                Text("+10 ${s.currencyDh}", fontWeight = FontWeight.Bold)
             }
             Button(
                 onClick = { onAdjustClientPrice(20) },
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ObsidianBlack, contentColor = ElectricLime),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WepeEmeraldDark, contentColor = Color.White),
                 modifier = Modifier
                     .weight(0.9f)
                     .height(48.dp)
@@ -860,7 +950,7 @@ private fun ClientRealtimeOffersView(
 
     if (showCustomClientPriceDialog) {
         CustomPriceInputDialog(
-            title = "تحديد سعرك المقترح",
+            title = s.clientYourProposedPrice,
             initialPrice = request.proposedPrice,
             onDismiss = { showCustomClientPriceDialog = false },
             onConfirm = { newPrice ->
@@ -876,11 +966,31 @@ fun FairPriceIndicatorPill(
     priceProposal: JobPriceProposal,
     modifier: Modifier = Modifier
 ) {
+    val s = hirafiStrings()
     val assessment = priceProposal.assessFairness()
     val (bg, fg) = when (assessment) {
         FairPriceAssessment.LOW -> UrgentCoral.copy(alpha = 0.12f) to UrgentCoral
-        FairPriceAssessment.FAIR -> VerifiedEmeraldSoft to VerifiedEmerald
-        FairPriceAssessment.GENEROUS -> ElectricLimeSoft to ObsidianBlack
+        FairPriceAssessment.FAIR -> VerifiedEmeraldSoft to WepeEmeraldDark
+        FairPriceAssessment.GENEROUS -> WepeEmeraldSoft to WepeEmeraldDark
+    }
+
+    val assessmentLabel = when (s.language) {
+        AppLanguage.ARABIC -> "${assessment.labelAr} • ${assessment.hintAr}"
+        AppLanguage.FRENCH -> when (assessment) {
+            FairPriceAssessment.LOW -> "Prix bas • Augmentez pour plus d'offres"
+            FairPriceAssessment.FAIR -> "Prix équitable • Bon taux d'acceptation"
+            FairPriceAssessment.GENEROUS -> "Prix attractif • Réponse rapide"
+        }
+        AppLanguage.ENGLISH -> when (assessment) {
+            FairPriceAssessment.LOW -> "Low offer • Raise price for faster bids"
+            FairPriceAssessment.FAIR -> "Fair price • Balanced market range"
+            FairPriceAssessment.GENEROUS -> "Great offer • Fast craftsman response"
+        }
+    }
+    val marketPrefix = when (s.language) {
+        AppLanguage.ARABIC -> "السوق"
+        AppLanguage.FRENCH -> "Marché"
+        AppLanguage.ENGLISH -> "Market"
     }
 
     Surface(
@@ -898,7 +1008,7 @@ fun FairPriceIndicatorPill(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "${assessment.labelAr} • ${assessment.hintAr}",
+                text = assessmentLabel,
                 color = fg,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
@@ -908,7 +1018,7 @@ fun FairPriceIndicatorPill(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "السوق: ${priceProposal.recommendedMinDh}–${priceProposal.recommendedMaxDh} د.م",
+                text = "$marketPrefix: ${priceProposal.recommendedMinDh}–${priceProposal.recommendedMaxDh} ${s.currencyDh}",
                 color = fg.copy(alpha = 0.85f),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold
@@ -922,6 +1032,7 @@ fun BiddingSessionSummaryStrip(
     summary: BiddingSessionSummary,
     modifier: Modifier = Modifier
 ) {
+    val s = hirafiStrings()
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         shape = RoundedCornerShape(14.dp),
@@ -936,15 +1047,20 @@ fun BiddingSessionSummaryStrip(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val offersWord = when (s.language) {
+                AppLanguage.ARABIC -> "${summary.activeOfferCount} عروض متاحة"
+                AppLanguage.FRENCH -> "${summary.activeOfferCount} offres"
+                AppLanguage.ENGLISH -> "${summary.activeOfferCount} offers"
+            }
             Text(
-                text = "${summary.activeOfferCount} عروض متاحة",
+                text = offersWord,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             summary.lowestPriceDh?.let { lowest ->
                 Text(
-                    text = "أقل عرض: $lowest د.م",
+                    text = "${s.sortLowestPrice}: $lowest ${s.currencyDh}",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = VerifiedEmerald
@@ -952,7 +1068,7 @@ fun BiddingSessionSummaryStrip(
             }
             summary.fastestEtaMinutes?.let { fastest ->
                 Text(
-                    text = "أسرع وصول: $fastest د",
+                    text = "${s.sortFastestEta}: $fastest ${s.unitMin}",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -969,18 +1085,24 @@ private fun CustomPriceInputDialog(
     onDismiss: () -> Unit,
     onConfirm: (Int) -> Unit
 ) {
+    val s = hirafiStrings()
     var input by remember { mutableStateOf(initialPrice.toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Bold) },
+        containerColor = Color.White,
+        title = { Text(title, fontWeight = FontWeight.Bold, color = ObsidianBlack) },
         text = {
             OutlinedTextField(
                 value = input,
                 onValueChange = { if (it.all { ch -> ch.isDigit() }) input = it },
-                label = { Text("السعر بالدرهم (DH)") },
+                label = { Text("${s.clientYourProposedPrice} (${s.currencyDh})") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = WepeEmerald,
+                    unfocusedBorderColor = WepeHairline
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("custom_price_input_field")
@@ -996,15 +1118,15 @@ private fun CustomPriceInputDialog(
                         onDismiss()
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricLime, contentColor = ObsidianBlack),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WepeEmerald, contentColor = Color.White),
                 modifier = Modifier.testTag("confirm_custom_price_button")
             ) {
-                Text("تأكيد", fontWeight = FontWeight.Bold)
+                Text(s.confirm, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("إلغاء") }
+            TextButton(onClick = onDismiss) { Text(s.cancel, color = Color(0xFF475467)) }
         }
     )
 }

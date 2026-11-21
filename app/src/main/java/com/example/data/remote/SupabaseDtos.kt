@@ -21,6 +21,11 @@ data class SupabaseRefreshTokenRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class SupabaseRecoverRequest(
+    val email: String
+)
+
+@JsonClass(generateAdapter = true)
 data class SupabaseAuthUserDto(
     val id: String? = null,
     val email: String? = null,
